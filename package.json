@@ -15,5 +15,8 @@
   },
   "peerDependencies": {
     "typescript": "5"
+  },
+  "dependencies": {
+    "wrap-core": "link:wrap-core"
   }
 }
