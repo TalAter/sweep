@@ -1,0 +1,19 @@
+{
+  "name": "sweep",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "version": "0.0.1",
+  "license": "MIT",
+  "scripts": {
+    "test": "bun test",
+    "lint": "bunx biome check . --write --error-on-warnings && bunx tsc --noEmit",
+    "check": "bun run lint && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "5"
+  }
+}
