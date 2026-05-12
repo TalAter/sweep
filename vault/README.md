@@ -79,7 +79,9 @@ Sweep does not observe the filesystem during install. Tools that create runtime 
 
 ## The install dialog
 
-Sweep's analysis surfaces in a TUI dialog. Two states.
+Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user can decide; it does not deliver verdicts on the user's behalf. There is no "all clear" green state — the dialog reads neutral when no concerning signals are present and warning when they are. Absence of red flags is not endorsement.
+
+Two states.
 
 **Allow.** No concerning signals. Soft LLM-prose verdict at the top. Signal panel below — `✓` known-positive, `◯` neutral. Behavior list framed *"things this script appears to do (not exhaustive)"* — sweep does not claim totality. Buttons: `[Cancel] [Run] [Read source]`. Cancel is the default focus.
 
@@ -111,7 +113,7 @@ Versioning is best-effort: when the LLM extracts an explicit version from the sc
 - **Surface change history.** *"This script changed twice in the last 30 days; the change on 2026-04-12 added a new binary URL."* Cross-time signal sweep cannot build alone.
 - Log native upgrade/uninstall commands
 
-**Privacy footprint:** the registry sees `(IP address, install URL, timestamp)`. No user identity, no machine fingerprint, no installed-tool list, no telemetry on individual users. Probably less revealing than `brew install`.
+**Privacy footprint:** each request sends install URL and timestamp (maybe content hash). No personally identifiable data is stored.
 
 ## What sweep catches
 
@@ -133,3 +135,6 @@ What sweep does **not** catch: novel attacks not in any DB and not LLM-obvious; 
 - **In-script header standard.** Open Graph for installers. Publishers embed a YAML/JSON block at the top of `install.sh`.
 - **Sandbox detonation and fs-watch during install.** Run installers in Docker / VM, observe behavior and record filesystem writes. Most of the value flows through the registry running this on popular installers and caching the result.
 - **source viewer** - Syntax highlighted and annotated source installer source viewer.
+- **URL sanitization before registry submission.** Redact non-public URL shapes (presigned links, tokens in path or userinfo, internal hosts) client-side; fall back to hash-only when the URL looks non-public.
+- **`--no-registry` flag and config.** Disable all registry calls for users who don't want any metadata flow.
+- **Signed registry records.** Per-record signatures so registry tampering is detectable by clients.
