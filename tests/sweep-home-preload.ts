@@ -24,7 +24,14 @@ import { join } from "node:path";
 export const TEST_HOME = mkdtempSync(join(tmpdir(), "sweep-test-home-"));
 process.env.SWEEP_HOME = TEST_HOME;
 
+// Import AFTER setting SWEEP_HOME so `src/fs.ts` captures the temp dir at
+// module load. A top-level `import` would hoist and run before the assignment.
+const { __resetForTests } = await import("../src/store/db.ts");
+
 beforeEach(() => {
   rmSync(TEST_HOME, { recursive: true, force: true });
   mkdirSync(TEST_HOME, { recursive: true });
+  // The cached DB handle points at the just-deleted sweep.db. Drop it so
+  // the next ensureDb() opens against the fresh home dir.
+  __resetForTests();
 });
