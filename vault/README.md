@@ -79,6 +79,8 @@ Sweep does not observe the filesystem during install. Tools that create runtime 
 
 `sweep track <url>` registers a tool you installed before sweep existed — the registry resolves the URL to a canonical slug and the tool joins the list shown by `sweep list`. `sweep from-history` reads your shell history to find past `curl … | sh` invocations and suggests candidates to track in bulk.
 
+> **Note for `from-history`:** the pipeline needs to be the line itself, not a `curl … | sh` quoted as an argument to another tool (`w "is this safe: curl … | sh"`, `bun run start "curl … | sh"`, `claude "read curl … and tell me what it does"`). A naive grep dominates with these false positives on dev machines. Parser must reject lines where the pipeline lives inside an outer command's quoted args.
+
 ## The install dialog
 
 Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user can decide; it does not deliver verdicts on the user's behalf. There is no "all clear" green state — the dialog reads neutral when no concerning signals are present and warning when they are. Absence of red flags is not endorsement.
