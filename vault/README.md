@@ -133,6 +133,21 @@ The signals available. Most signals are negative — they flag known-bad. Absenc
 
 What sweep does **not** catch: novel attacks not in any DB and not LLM-obvious; runtime behavior after install completes; changes done by executables; sophisticated attackers who understand the LLM's blind spots.
 
+## Glossary
+
+The distinctions are load-bearing. An *invocation* is what happens when the user presses enter. An *install* is the subset that succeeded. A *package* is the row that aggregates them.
+
+- **Sweep home.** `~/.sweep/` or `$SWEEP_HOME`. The on-disk root for everything sweep persists.
+- **DB.** `sweep.db` under sweep home. SQLite, two tables. Migrations gated by `schema_meta.version`.
+- **Script store.** `cache/scripts/<sha256>` under sweep home. Content-addressed bytes — identical scripts dedupe to the same file.
+- **Install command.** The parsed form of the user's `curl | sh` line: `envVars`, `sudo`, `shell`, `scriptArgs`, `url`. TS type: `InstallCommand`. Distinct from a "subcommand" — install commands are user input; subcommands are sweep verbs like `list`.
+- **Invocation.** Each time the user runs `sweep "<cmd>"`. Exactly one row in `invocations` regardless of outcome — parse failures and fetch failures count. `sweep list` and other non-install runs do *not* produce invocation rows.
+- **Package.** One row in `packages`. Materializes the moment a fetch succeeds. Carries lifecycle status (see [[lifecycle]]).
+- **Install.** An invocation that ended with `exitCode === 0`. Promotes the package's `status` to `installed`.
+- **Slug.** Human-readable identifier for a package. v0: derived from the URL host stem (`slugFromUrl`). v1: registry-canonical. Not deduplicated across packages — the `source_url` UNIQUE constraint disambiguates rows, and `sweep list` shows source URL alongside slug.
+- **Runner shell.** The shell that executes the script (`sh`, `bash`, `zsh`). Right side of the pipe in the user's input.
+- **Fetcher.** The tool the user typed to download the script (`curl`, `wget`). Sweep ignores it at exec time — sweep re-fetches itself, so the original fetcher's flags don't carry over.
+
 ## Future ideas
 
 - **`sweep export` / `sweep import`.** A Brewfile equivalent for `curl | sh` installs. Export produces a JSON manifest; import re-runs each install through sweep on a new machine.
