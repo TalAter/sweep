@@ -16,7 +16,7 @@ Sweep is a package manager for the long tail of dev tools that ship via `curl | 
 ```
 sweep "curl … | sh"     install (with LLM analysis if configured)
 sweep                   interactive: paste, type, or pull from clipboard
-sweep installed         list everything sweep installed
+sweep list              list everything sweep installed
 sweep update [name]     update one tool, or all
 sweep away <name>       uninstall (best-effort)
 sweep show <name>       saved script + last analysis
@@ -37,7 +37,7 @@ The paste-and-judge path. The user pastes the publisher's pipeline:
 sweep "curl -fsSL https://ollama.com/install.sh | sh"
 ```
 
-Sweep accepts any pipeline shape — sudo-wrapped, process-substitution, `-s -- args`, `bash -c "$(curl …)"`, all of it. There is no hand-rolled grammar; the LLM extracts URL, shell, and forwarded args.
+Sweep accepts any pipeline shape — sudo-wrapped, process-substitution, `-s -- args`, `bash -c "$(curl …)"`, all of it. A hand-rolled parser handles the common shapes today; the long tail (and the goal) is LLM extraction of URL, shell, and forwarded args, behind the same interface.
 
 Sweep fetches the script, saves it locally (keyed by content hash), and consults the registry. Popular installers are recognized — the registry returns cached info, including an LLM analysis so the user spends no tokens. Scripts the registry hasn't seen, or versions that have changed since its last record, get a local LLM pass anchored by whatever prior context the registry has. The registry also flags hashes it knows are problematic and can carry a registry-side report; both reach the user even with no local LLM configured.
 
@@ -77,7 +77,7 @@ Sweep does not observe the filesystem during install. Tools that create runtime 
 
 ## Adopting existing installs
 
-`sweep track <url>` registers a tool you installed before sweep existed — the registry resolves the URL to a canonical slug and the tool joins your `installed` list. `sweep from-history` reads your shell history to find past `curl … | sh` invocations and suggests candidates to track in bulk.
+`sweep track <url>` registers a tool you installed before sweep existed — the registry resolves the URL to a canonical slug and the tool joins the list shown by `sweep list`. `sweep from-history` reads your shell history to find past `curl … | sh` invocations and suggests candidates to track in bulk.
 
 ## The install dialog
 
@@ -99,9 +99,9 @@ Sweep is useful with no LLM configured. The first-run wizard makes the choice ex
 
 ## The local store
 
-Everything sweep does is backed by a local store. It holds every install script sweep has ever fetched (keyed by content hash, so identical scripts deduplicate), every recursively fetched script, every binary hash, the recorded uninstall steps for each install, and a log of every encounter — what was fetched, when, from where, the install outcome (ran, cancelled, errored), and how it was identified.
+Everything sweep does is backed by a local store. It holds every install script sweep has ever fetched (keyed by content hash, so identical scripts deduplicate), every recursively fetched script, every binary hash, the recorded uninstall steps for each install, and a record of every invocation — what was fetched, when, from where, the outcome (ran, cancelled, errored), and how it was identified.
 
-The log is the source of truth for `sweep installed`.
+The store is a SQLite database with two tables: `packages` (one row per tracked tool, with lifecycle status) and `invocations` (the firehose: every `sweep "<…>"` run, including parse and fetch failures). `sweep list` reads `packages`; the invocation history is the audit trail behind it.
 
 Versioning is best-effort: when the LLM extracts an explicit version from the script (`VERSION=1.4.2`), sweep records it. Otherwise the install is identified by content hash.
 
