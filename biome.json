@@ -1,5 +1,8 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
+  "files": {
+    "includes": ["**", "!**/node_modules", "!vault", "!.claude/worktrees"]
+  },
   "formatter": {
     "indentStyle": "space",
     "indentWidth": 2,
