@@ -18,6 +18,6 @@
     "typescript": "5"
   },
   "dependencies": {
-    "wrap-core": "link:wrap-core"
+    "wrap-core": "github:TalAter/wrap-core#main"
   }
 }
