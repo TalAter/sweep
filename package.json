@@ -6,6 +6,7 @@
   "version": "0.0.1",
   "license": "MIT",
   "scripts": {
+    "setup": "./scripts/setup",
     "start": "bun run src/index.ts",
     "test": "bun test",
     "lint": "bunx biome check . --write --error-on-warnings && bunx tsc --noEmit",
