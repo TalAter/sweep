@@ -12,9 +12,13 @@
     "check": "bun run lint && bun test"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/react": "^19.2.15"
   },
   "peerDependencies": {
+    "@inkjs/ui": "^2",
+    "ink": "^7",
+    "react": "^19",
     "typescript": "5"
   },
   "dependencies": {

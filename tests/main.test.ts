@@ -113,7 +113,7 @@ describe("main()", () => {
     expect(errSpy).toHaveBeenCalled();
   });
 
-  test("no positional arg falls through to parse and exits 2 (kind: 'empty')", async () => {
+  test("no positional arg in non-TTY falls through to parse and exits 2", async () => {
     process.argv = ["bun", "/path/to/index.ts"];
     await main();
     expect(process.exitCode).toBe(2);
