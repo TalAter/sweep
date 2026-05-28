@@ -22,6 +22,6 @@
     "typescript": "5"
   },
   "dependencies": {
-    "wrap-core": "github:TalAter/wrap-core#main"
+    "wrap-core": "0.0.1"
   }
 }
