@@ -1,9 +1,0 @@
-#!/bin/bash
-# Install deps then re-establish the local wrap-core link.
-# Use `bun run setup` instead of bare `bun install` — the latter replaces
-# the local link with the stale GitHub version.
-
-set -euo pipefail
-
-bun install "$@"
-bun link wrap-core
