@@ -9,6 +9,7 @@
     "start": "bun run src/index.ts",
     "build": "bun run scripts/build.ts",
     "build:watch": "watchexec -w src -w node_modules/wrap-core/src bun run scripts/build.ts",
+    "sandbox": "bun run scripts/sandbox.ts",
     "test": "bun test",
     "lint": "bunx biome check . --write --error-on-warnings && bunx tsc --noEmit",
     "check": "bun run lint && bun test"
