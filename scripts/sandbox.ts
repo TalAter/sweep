@@ -6,10 +6,12 @@
  * is what runs. This script is NOT a build tool — it assumes the binaries
  * already exist and only manages the container.
  *
- *   bun run sandbox        up:   build image if needed, create/start the
- *                                container, exec an interactive shell.
- *   bun run sandbox down   stop the container (in-box state preserved).
- *   bun run sandbox kill   destroy the container + its in-box ~/.sweep.
+ *   bun run sandbox          up:   build image if needed, create/start the
+ *                                  container, exec an interactive shell.
+ *   bun run sandbox down     stop the container (in-box state preserved).
+ *   bun run sandbox kill     destroy the container + its in-box ~/.sweep.
+ *   bun run sandbox rebuild  force-rebuild the image (after a Dockerfile
+ *                                  change), recreate this box, exec a shell.
  *
  * One container per working copy: the name is keyed to the git toplevel, so
  * main and each worktree get an independent box, runnable in parallel.
@@ -58,9 +60,11 @@ function imageExists(): boolean {
   return query(["docker", "image", "inspect", IMAGE]).code === 0;
 }
 
-async function ensureImage(): Promise<void> {
-  if (imageExists()) return;
-  console.error("sandbox: building image (first run, one-time)…");
+async function ensureImage(force = false): Promise<void> {
+  if (!force && imageExists()) return;
+  console.error(
+    force ? "sandbox: rebuilding image…" : "sandbox: building image (first run, one-time)…",
+  );
   // The Dockerfile COPYs nothing, so the build context is irrelevant — pass
   // the scripts dir (small) rather than the whole repo.
   const code = await run(["docker", "build", "-t", IMAGE, "-f", DOCKERFILE, dirname(DOCKERFILE)]);
@@ -116,6 +120,14 @@ async function up(root: string, name: string): Promise<number> {
   return await run(["docker", "exec", tty, "-w", "/home/dev", name, "bash"]);
 }
 
+async function rebuild(root: string, name: string): Promise<number> {
+  await ensureImage(true);
+  // The stale container is pinned to the pre-rebuild image; drop it so `up`
+  // recreates it from the freshly built one.
+  await kill(name);
+  return await up(root, name);
+}
+
 async function down(name: string): Promise<number> {
   if (containerState(name) === "absent") {
     console.error("sandbox: no container to stop.");
@@ -146,7 +158,10 @@ switch (verb) {
   case "kill":
     process.exitCode = await kill(name);
     break;
+  case "rebuild":
+    process.exitCode = await rebuild(root, name);
+    break;
   default:
-    console.error(`sandbox: unknown verb "${verb}" (use: up | down | kill)`);
+    console.error(`sandbox: unknown verb "${verb}" (use: up | down | kill | rebuild)`);
     process.exitCode = 2;
 }
