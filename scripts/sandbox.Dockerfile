@@ -6,10 +6,12 @@
 # against glibc, so musl/alpine would not run them.
 FROM ubuntu:24.04
 
+# Keep apt's package lists (don't rm /var/lib/apt/lists) so installers run
+# inside the box can `apt-get install` their deps on demand — faithfully
+# mirroring a real dev machine. Some installers (e.g. ollama) need zstd.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       ca-certificates curl git sudo sqlite3 \
-  && rm -rf /var/lib/apt/lists/*
+       ca-certificates curl git sudo sqlite3
 
 # Non-root user with passwordless sudo — mirrors a real dev machine, so
 # installers that shell out to `sudo` work and ones that refuse to run as root
