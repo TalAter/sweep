@@ -1,6 +1,6 @@
 import type { Color } from "wrap-core/ansi";
 import { resolveAppearance, resolveTheme, setTheme } from "wrap-core/theme";
-import { openDialog, preloadDialogRuntime, ThemeProvider } from "wrap-core/tui";
+import { openDialog, preloadDialogRuntime } from "wrap-core/tui";
 import { sweepFs } from "../fs.ts";
 
 const DARK_GRADIENT: Color[] = [
@@ -25,15 +25,11 @@ export async function promptInstallCommand(): Promise<string | null> {
     preloadDialogRuntime(),
   ]);
 
-  return openDialog<string | null>((close) =>
-    react.createElement(ThemeProvider, {
-      theme,
-      nerdFonts: false,
-      children: react.createElement(InteractiveDialog, {
-        gradientStops,
-        onSubmit: close,
-        onCancel: () => close(null),
-      }),
+  return openDialog<string | null>({ theme, nerdFonts: false }, (close) =>
+    react.createElement(InteractiveDialog, {
+      gradientStops,
+      onSubmit: close,
+      onCancel: () => close(null),
     }),
   );
 }
