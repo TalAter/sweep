@@ -1,6 +1,6 @@
 import type { Color } from "wrap-core/ansi";
 import { resolveAppearance, resolveTheme, setTheme } from "wrap-core/theme";
-import { chooseDialogStdin, DIALOG_INK_OPTIONS } from "wrap-core/tui";
+import { openDialog, preloadDialogRuntime, ThemeProvider } from "wrap-core/tui";
 import { sweepFs } from "../fs.ts";
 
 const DARK_GRADIENT: Color[] = [
@@ -19,39 +19,21 @@ export async function promptInstallCommand(): Promise<string | null> {
 
   const gradientStops = appearance === "light" ? LIGHT_GRADIENT : DARK_GRADIENT;
 
-  const [ink, react, { InteractiveDialog }, { ThemeProvider }] = await Promise.all([
-    import("ink"),
+  const [react, { InteractiveDialog }] = await Promise.all([
     import("react"),
     import("./interactive.tsx"),
-    import("wrap-core/tui"),
+    preloadDialogRuntime(),
   ]);
 
-  return new Promise<string | null>((resolve) => {
-    const { stream: stdin, fd: ownedFd } = chooseDialogStdin();
-
-    const cleanup = () => {
-      app.unmount();
-      if (ownedFd !== null && typeof (stdin as { destroy?: () => void }).destroy === "function") {
-        (stdin as { destroy: () => void }).destroy();
-      }
-    };
-
-    const onSubmit = (command: string) => {
-      cleanup();
-      resolve(command);
-    };
-    const onCancel = () => {
-      cleanup();
-      resolve(null);
-    };
-
-    const app = ink.render(
-      react.createElement(ThemeProvider, {
-        theme,
-        nerdFonts: false,
-        children: react.createElement(InteractiveDialog, { gradientStops, onSubmit, onCancel }),
+  return openDialog<string | null>((close) =>
+    react.createElement(ThemeProvider, {
+      theme,
+      nerdFonts: false,
+      children: react.createElement(InteractiveDialog, {
+        gradientStops,
+        onSubmit: close,
+        onCancel: () => close(null),
       }),
-      { ...DIALOG_INK_OPTIONS, stdin },
-    );
-  });
+    }),
+  );
 }
