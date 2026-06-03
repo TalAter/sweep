@@ -10,6 +10,7 @@
  * into the test report.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { stripAnsi } from "wrap-core/ansi";
 import { main } from "../src/main.ts";
 import { ensureDb } from "../src/store/db.ts";
 
@@ -98,12 +99,23 @@ describe("main()", () => {
     logSpy.mockClear();
     errSpy.mockClear();
 
+    // The table renders inline via printInline (stdout), not console.log.
+    const chunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
     process.argv = ["bun", "/path/to/index.ts", "list"];
-    await main();
+    try {
+      await main();
+    } finally {
+      process.stdout.write = origWrite;
+    }
     expect(process.exitCode).toBe(0);
-    const line = logLines()[0] ?? "";
-    expect(line).toContain("localhost"); // slug from http://localhost:<port>
-    expect(line).toContain(url("/seed.sh"));
+    // Slug + truncated host are both "localhost" (from http://localhost:<port>).
+    expect(stripAnsi(chunks.join(""))).toContain("localhost");
   });
 
   test("malformed install command exits 2 and prints to stderr", async () => {
