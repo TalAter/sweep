@@ -49,6 +49,7 @@ Canonical vocabulary. Use consistently; do not invent synonyms. The distinctions
 - [[product-spec]] — what we're building and why; the CLI surface, analysis funnel, registry
 - [[architecture]] — module shape, data flow, v1 seams
 - [[lifecycle]] — package status machine, one-invocation-row-per-call invariant
+- [[script-inspection]] — candidate install paths from LLM analysis, lstat resolution; existence over content
 - [[conventions]] — cross-cutting code-style decisions
 - [[vault-maintenance]] — rules for writing and rewriting vault notes
 - [[wrap-core-api]] — shared substrate API; a directory symlinked from wrap-core — start at its README
