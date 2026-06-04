@@ -4,8 +4,12 @@
 
 - **Runtime:** Bun (TypeScript). Use `bun add` / `bun add -D` for dependencies. Never npm or pnpm.
 - **Lint/format:** Biome + tsc (`bun run lint` = biome --write + typecheck).
-- **Test:** `bun test` (files in `tests/`).
+- **Test:** `bun test` (files in `tests/`). Run specific tests with `bun test tests/foo.test.ts`.
 - **Full check:** `bun run check` = lint + test.
+
+## Testing — TDD
+
+All implementation follows TDD. Always write a failing test before writing code. No exceptions. Aim for maximum test coverage, but tests must earn their place — skip tests that only prove plumbing (exports, imports, type-only assertions). **Before writing tests or implementation, read `.claude/skills/testing.md`.**
 
 ## wrap-core dependency
 
