@@ -11,6 +11,10 @@
 
 All implementation follows TDD. Always write a failing test before writing code. No exceptions. Aim for maximum test coverage, but tests must earn their place — skip tests that only prove plumbing (exports, imports, type-only assertions). **Before writing tests or implementation, read `.claude/skills/testing.md`.**
 
+## Stop hook
+
+A stop hook runs `bun run lint` (biome --write + tsc) automatically when you finish. Don't run lint/format/tsc as a final check before stopping — they'll just run twice. Tests are **not** in the stop hook — run them yourself when needed, preferring targeted runs (`bun test tests/foo.test.ts`) over the full suite.
+
 ## wrap-core dependency
 
 Sweep is a sibling of [Wrap](../wrap/), sharing substrate via the `wrap-core` package. Different domain, similar bones.
