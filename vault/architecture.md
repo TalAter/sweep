@@ -36,7 +36,7 @@ No JSONL log. No config file in v0.
 The places the architecture stretches without restructuring:
 
 - **New verbs.** Add a file under `subcommands/` and register it. Install stays the implicit fallback.
-- **Analysis + dialog.** Slot between fetch and exec inside `runInstall` — currently a no-op step in the orchestrator.
+- **Analysis + dialog.** Slot between fetch and exec inside `runInstall` — step 5 (`installer/analyze.ts`) runs env-gated LLM analysis behind `SWEEP_TEST_RESPONSES`, a strict no-op for real installs until a production provider is flipped on; dialog remains unbuilt.
 - **Config / first-run wizard.** `ensureConfig()` is a stub returning `{}`; the call site won't change shape when v1 reads from disk.
 - **Registry / canonical naming.** `slugFromUrl` has a stable signature; v1 swaps the body for a registry call.
 - **Schema migrations.** `db.ts` reads `schema_meta(version)` and dispatches additive migrations — bump the version and append a migration block.

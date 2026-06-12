@@ -305,7 +305,90 @@ describe("installed → failed exec preserves installed status", () => {
 });
 
 // =========================================================================
-// 8. Transactional invariant
+// 8. Step-5 analysis seam (env-gated LLM analysis)
+// =========================================================================
+//
+// `SWEEP_TEST_RESPONSES` is sweep's own test-provider contract (wrap-core
+// reads no env vars — test-provider selection is consumer policy). Set →
+// step 5 runs a canned analysis conversation end to end; absent → step 5
+// stays a no-op. The preload deletes the var before every test, so every
+// other test in this file pins the no-op path for free.
+//
+// The invariant under test throughout: analysis NEVER changes install
+// semantics — exit codes, invocation rows, and package status belong to
+// the exec path alone, whatever the analysis does.
+
+describe("step-5 analysis (env-gated)", () => {
+  /** Joined console.error lines, mirroring main.test.ts's logLines(). */
+  const errLines = (): string[] =>
+    errSpy.mock.calls.map((call) => (call as unknown[]).map((a) => String(a)).join(" "));
+
+  test("canned summary: install succeeds and a sweep: line carries the summary", async () => {
+    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
+    process.env.SWEEP_TEST_RESPONSES = JSON.stringify({
+      summary: "Downloads a binary to /usr/local/bin.",
+    });
+
+    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
+
+    const line = errLines().find((l) => l.includes("Downloads a binary to /usr/local/bin."));
+    expect(line).toBeDefined();
+    expect(line).toStartWith("sweep:");
+
+    // Install semantics unchanged by the analysis.
+    expect(onlyRow(allPackages()).status).toBe("installed");
+    const inv = onlyRow(allInvocations());
+    expect(inv.outcome).toBe("ran");
+    expect(inv.exit_code).toBe(0);
+  });
+
+  test("provider error in playback: install still succeeds; sweep: failure line surfaced", async () => {
+    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
+    // JSON-array form — also proves the list shape of the env value parses.
+    process.env.SWEEP_TEST_RESPONSES = JSON.stringify(["ERROR: model exploded"]);
+
+    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
+
+    const line = errLines().find((l) => l.includes("model exploded"));
+    expect(line).toBeDefined();
+    expect(line).toStartWith("sweep:");
+
+    expect(onlyRow(allPackages()).status).toBe("installed");
+    expect(onlyRow(allInvocations()).outcome).toBe("ran");
+  });
+
+  test("unparseable canned response: parse retry exhausts; install still succeeds", async () => {
+    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
+    // Not JSON → taken verbatim as a single repeating response → both send
+    // attempts fail to parse → typed parse error → caught and surfaced.
+    process.env.SWEEP_TEST_RESPONSES = "this is not json";
+
+    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
+
+    const line = errLines().find((l) => l.includes("script analysis failed"));
+    expect(line).toBeDefined();
+    expect(line).toStartWith("sweep:");
+
+    expect(onlyRow(allPackages()).status).toBe("installed");
+    expect(onlyRow(allInvocations()).outcome).toBe("ran");
+  });
+
+  test("without SWEEP_TEST_RESPONSES, a happy-path install makes zero console.error calls (no analysis lines)", async () => {
+    // The preload wiped the var; this pins the gate: step 5 is a strict
+    // no-op for real users (createLlm never runs, no analysis line is
+    // printed). Scope: console.error calls only — the spawned script's own
+    // stderr is out of frame.
+    routes["/plain.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
+
+    expect(await runInstall(installCmd("/plain.sh"))).toBe(0);
+
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(onlyRow(allPackages()).status).toBe("installed");
+  });
+});
+
+// =========================================================================
+// 9. Transactional invariant
 // =========================================================================
 
 describe("transactional invariant", () => {

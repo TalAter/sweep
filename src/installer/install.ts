@@ -19,6 +19,7 @@ import { ensureDb } from "../store/db.ts";
 import { insertInvocation } from "../store/invocations.ts";
 import { findOrCreatePackage, updatePackageOnExec } from "../store/packages.ts";
 import { saveScript } from "../store/scripts.ts";
+import { maybeAnalyzeScript } from "./analyze.ts";
 import { runScript } from "./exec.ts";
 import { FetchScriptError, fetchScript } from "./fetch.ts";
 import { parseInstallCommand } from "./parse.ts";
@@ -77,7 +78,8 @@ export async function runInstall(raw: string): Promise<number> {
   // ---- 4. Resolve package -------------------------------------------------
   const pkg = findOrCreatePackage({ url: parsed.url, slug: slugFromUrl(parsed.url) });
 
-  // ---- 5. v1 seam: analysis + dialog. v0 = no-op. -------------------------
+  // ---- 5. Analysis (env-gated; no-op without sweep's test contract) -------
+  await maybeAnalyzeScript({ url: parsed.url, scriptBytes: fetched.bytes });
 
   // ---- 6. Exec ------------------------------------------------------------
   const { exitCode } = await runScript(parsed, fetched.bytes);

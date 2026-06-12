@@ -34,4 +34,8 @@ beforeEach(() => {
   // The cached DB handle points at the just-deleted sweep.db. Drop it so
   // the next ensureDb() opens against the fresh home dir.
   __resetForTests();
+  // Step-5 analysis gates on sweep's test-provider env contract. Wipe it so
+  // a value leaking from the developer's shell (or a previous test) can't
+  // flip the gate — tests that want analysis set it inside the test body.
+  delete process.env.SWEEP_TEST_RESPONSES;
 });
