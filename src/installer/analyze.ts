@@ -157,7 +157,7 @@ const ANALYSIS_SYSTEM_PROMPT =
   '- "behaviors": an array of { "description": string, "sudo": boolean } objects ' +
   "describing concrete actions the script appears to take, with sudo:true on " +
   "actions that require root. Keep descriptions neutral and concrete.\n\n" +
-  "Do not include markers, glyphs, or labels like \"(not exhaustive)\" — " +
+  'Do not include markers, glyphs, or labels like "(not exhaustive)" — ' +
   "presentation chrome is added by the renderer, not you.\n\n" +
   "Output only the JSON object — no prose before or after it, no markdown code " +
   "fences.";
@@ -184,8 +184,7 @@ const twoPassAnalysisSchema = z.object({
 
 const manipulationSchema = z.object({ manipulationDetected: z.boolean() });
 
-const bareMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err);
+const bareMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** Run one structured pass on its own handle/conversation. Throws on failure. */
 async function runPass<S extends z.ZodObject>(
