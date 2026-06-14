@@ -11,7 +11,7 @@ This vault is the living reference: **what** Sweep does and **why** decisions we
 
 This note is the single source for what sweep is. The root `README.md` restates it for GitHub rendering — when the pitch changes, update both; everything else links here.
 
-**Before writing or restructuring any note, read [[vault-maintenance]].**
+**Before writing or restructuring any note, read [[vault-maintenance]].** Before writing an implementation spec, read `impl-specs/README.md`.
 
 ---
 
