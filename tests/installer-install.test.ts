@@ -1,62 +1,38 @@
 /**
- * Integration tests for `runInstall` — the install orchestrator.
+ * Integration tests for `runInstall` — the install orchestrator after the flip
+ * (step 6). `runInstall` no longer fetches or analyzes itself; it drives an
+ * injectable SESSION (the step-5 controller) and maps the session's
+ * `InstallDecision` to DB rows + CAS save + exec + exit codes.
  *
- * No network: a local `Bun.serve` fixture on an ephemeral port (`port: 0`)
- * supplies routes for happy path, non-zero exec, and 404. Tests register
- * routes per-test and drive the real fetch + spawn path end-to-end so we
- * exercise the actual integration (DB writes, CAS save, package status
- * transitions, transactional commit) rather than mocks.
+ * No network and no alt-screen: tests inject `runSession` to supply a canned
+ * decision (the bytes/outcome they want), so the real fetch + Ink stack never
+ * runs. The decision echoes back the `raw`/`parsed` that runInstall already
+ * parsed (direct mode), injecting only the fetched bytes/outcome. We still
+ * drive the real exec path (spawn) so DB writes, CAS save, package status
+ * transitions, and the transactional commit are exercised for real.
  *
- * `console.error` is silenced for every test so error-path output doesn't
- * leak into the test report. We don't assert on the exact message format;
- * we only assert that error paths print SOMETHING and that the DB ends up
- * in the right state.
+ * `console.error` is silenced per test; the spy lets error paths assert they
+ * printed SOMETHING (we don't pin message format).
  *
- * `process.env.SWEEP_HOME` is pinned by `tests/sweep-home-preload.ts`, and
- * the DB handle + temp home are reset between tests there — so each test
- * starts with empty `packages` and `invocations` tables.
+ * `process.env.SWEEP_HOME` is pinned by `tests/sweep-home-preload.ts`, and the
+ * DB handle + temp home are reset between tests there — so each test starts
+ * with empty `packages` and `invocations` tables.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { runInstall } from "../src/installer/install.ts";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { FetchedScript } from "../src/installer/fetch.ts";
+import { FetchScriptError } from "../src/installer/fetch.ts";
+import { type RunInstallDeps, runInstall } from "../src/installer/install.ts";
+import type { InstallCommand } from "../src/installer/parse.ts";
 import { ensureDb } from "../src/store/db.ts";
 import { readScript } from "../src/store/scripts.ts";
-
-// ---- fixture server -------------------------------------------------------
-//
-// Routes registered per-test, wiped in afterEach so handlers don't bleed.
-
-type Handler = (req: Request) => Response | Promise<Response>;
-const routes: Record<string, Handler> = {};
-
-let server: ReturnType<typeof Bun.serve>;
-
-beforeAll(() => {
-  server = Bun.serve({
-    port: 0,
-    fetch(req) {
-      const u = new URL(req.url);
-      const handler = routes[u.pathname];
-      return handler ? handler(req) : new Response("not found", { status: 404 });
-    },
-  });
-});
-
-afterAll(() => {
-  server.stop(true);
-});
+import type { SessionStart } from "../src/tui/install-session.ts";
 
 // ---- console.error silencer ----------------------------------------------
-//
-// Keep test output clean; record the spy so we can assert error paths
-// printed at least once.
 
 const errSpy = mock(() => {});
 const origConsoleError = console.error;
 
 beforeEach(() => {
-  // Wipe routes (defense vs. leftover handlers if a test threw mid-setup).
-  for (const k of Object.keys(routes)) delete routes[k];
-  // Reinstall spy each test; clear call history.
   console.error = errSpy;
   errSpy.mockClear();
 });
@@ -67,10 +43,11 @@ afterEach(() => {
 
 // ---- helpers -------------------------------------------------------------
 
-const url = (path: string): string => `http://localhost:${server.port}${path}`;
+/** A direct install command targeting a stable host (slug "localhost"). */
+const installCmd = (path: string, shell = "sh"): string =>
+  `curl -fsSL https://localhost${path} | ${shell}`;
 
-/** Build a `curl <url> | sh` install command targeting the fixture. */
-const installCmd = (path: string, shell = "sh"): string => `curl -fsSL ${url(path)} | ${shell}`;
+const sourceUrl = (path: string): string => `https://localhost${path}`;
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -80,6 +57,29 @@ const sha256Hex = (b: Uint8Array): string => {
   h.update(b);
   return h.digest("hex");
 };
+
+/** Build a `FetchedScript` from raw bytes (what a successful fetch would yield). */
+const fetchedFor = (b: Uint8Array): FetchedScript => ({
+  bytes: b,
+  sha256: sha256Hex(b),
+  finalUrl: "https://localhost/resolved",
+  fetchedAt: new Date().toISOString(),
+  status: 200,
+});
+
+/** Narrow a direct start so we can echo back its committed raw/parsed. */
+function directStart(s: SessionStart): { raw: string; parsed: InstallCommand } {
+  if (s.kind !== "direct") throw new Error("expected a direct session start");
+  return { raw: s.raw, parsed: s.parsed };
+}
+
+/** A `runSession` that always approves a run with the given bytes. */
+const runWith = (b: Uint8Array): RunInstallDeps => ({
+  runSession: async (s: SessionStart) => {
+    const { raw, parsed } = directStart(s);
+    return { kind: "run", raw, parsed, fetched: fetchedFor(b) };
+  },
+});
 
 /** All rows from `invocations`, newest first. */
 function allInvocations(): Array<Record<string, unknown>> {
@@ -107,18 +107,20 @@ function onlyRow<T>(rows: T[]): T {
 // =========================================================================
 
 describe("happy path", () => {
-  test("exits 0; persists installed package + ran invocation", async () => {
-    const body = bytes('echo "ok"\nexit 0\n');
+  test("exits 0; persists installed package + ran invocation; CAS written", async () => {
+    const body = bytes("echo ok\nexit 0\n");
     const hash = sha256Hex(body);
-    routes["/install.sh"] = () => new Response(body, { status: 200 });
 
-    const exitCode = await runInstall(installCmd("/install.sh"));
+    const exitCode = await runInstall(
+      { kind: "direct", raw: installCmd("/install.sh") },
+      runWith(body),
+    );
     expect(exitCode).toBe(0);
 
     const pkg = onlyRow(allPackages());
     expect(pkg.status).toBe("installed");
-    expect(pkg.slug).toBe("localhost"); // hostname stem of http://localhost:<port>/…
-    expect(pkg.source_url).toBe(url("/install.sh"));
+    expect(pkg.slug).toBe("localhost");
+    expect(pkg.source_url).toBe(sourceUrl("/install.sh"));
     expect(pkg.current_sha256).toBe(hash);
     expect(pkg.installed_at).toBeTruthy();
     expect(pkg.last_ran_at).toBeTruthy();
@@ -127,7 +129,7 @@ describe("happy path", () => {
     expect(inv.outcome).toBe("ran");
     expect(inv.exit_code).toBe(0);
     expect(inv.package_id).toBe(pkg.id);
-    expect(inv.url).toBe(url("/install.sh"));
+    expect(inv.url).toBe(sourceUrl("/install.sh"));
     expect(inv.sha256).toBe(hash);
     expect(inv.install_command_json).toBeTruthy();
     expect(inv.raw_input).toBe(installCmd("/install.sh"));
@@ -145,17 +147,18 @@ describe("happy path", () => {
 // =========================================================================
 
 describe("non-zero exit", () => {
-  test("returns the exec exit code; package transitions to failed; invocation outcome=errored", async () => {
+  test("returns the exec exit code; package → failed; invocation outcome=errored", async () => {
     const body = bytes("exit 7\n");
-    routes["/bad.sh"] = () => new Response(body, { status: 200 });
 
-    const exitCode = await runInstall(installCmd("/bad.sh"));
+    const exitCode = await runInstall(
+      { kind: "direct", raw: installCmd("/bad.sh") },
+      runWith(body),
+    );
     expect(exitCode).toBe(7);
 
     const pkg = onlyRow(allPackages());
     expect(pkg.status).toBe("failed");
-    // current_sha256 stays null on a fresh attempting→failed transition (per
-    // updatePackageOnExec spec: only success refreshes the hash).
+    // current_sha256 stays null on a fresh attempting→failed transition.
     expect(pkg.current_sha256).toBeNull();
 
     const inv = onlyRow(allInvocations());
@@ -165,13 +168,23 @@ describe("non-zero exit", () => {
 });
 
 // =========================================================================
-// 3. Parse failure
+// 3. Parse failure (pre-session — no session is ever mounted)
 // =========================================================================
 
 describe("parse failure", () => {
-  test("returns 2; one parse_failed invocation; no packages row", async () => {
-    const exitCode = await runInstall("not a real command");
+  test("returns 2; one parse_failed invocation; no packages row; no session", async () => {
+    let sessionCalled = false;
+    const exitCode = await runInstall(
+      { kind: "direct", raw: "not a real command" },
+      {
+        runSession: async () => {
+          sessionCalled = true;
+          throw new Error("session must not run on a pre-session parse failure");
+        },
+      },
+    );
     expect(exitCode).toBe(2);
+    expect(sessionCalled).toBe(false);
 
     const inv = onlyRow(allInvocations());
     expect(inv.outcome).toBe("parse_failed");
@@ -186,27 +199,39 @@ describe("parse failure", () => {
     expect(inv.ts_finished).toBeTruthy();
 
     expect(allPackages()).toHaveLength(0);
-
-    // Stderr was hit at least once.
     expect(errSpy).toHaveBeenCalled();
   });
 });
 
 // =========================================================================
-// 4. Fetch failure
+// 4. Fetch failure (session resolved fetch-failed)
 // =========================================================================
 
 describe("fetch failure", () => {
-  test("404 returns 1; one fetch_failed invocation; no packages row", async () => {
-    routes["/missing.sh"] = () => new Response("nope", { status: 404 });
-
-    const exitCode = await runInstall(installCmd("/missing.sh"));
+  test("returns 1; one fetch_failed invocation; no packages row", async () => {
+    const exitCode = await runInstall(
+      { kind: "direct", raw: installCmd("/missing.sh") },
+      {
+        runSession: async (s) => {
+          const { raw, parsed } = directStart(s);
+          return {
+            kind: "fetch-failed",
+            raw,
+            parsed,
+            error: new FetchScriptError(
+              "non-2xx",
+              `HTTP 404 Not Found: ${sourceUrl("/missing.sh")}`,
+            ),
+          };
+        },
+      },
+    );
     expect(exitCode).toBe(1);
 
     const inv = onlyRow(allInvocations());
     expect(inv.outcome).toBe("fetch_failed");
     expect(inv.package_id).toBeNull();
-    expect(inv.url).toBe(url("/missing.sh"));
+    expect(inv.url).toBe(sourceUrl("/missing.sh"));
     expect(inv.sha256).toBeNull();
     expect(inv.install_command_json).toBeTruthy();
     expect(inv.exit_code).toBeNull();
@@ -215,44 +240,124 @@ describe("fetch failure", () => {
     expect(inv.ts_finished).toBeTruthy();
 
     expect(allPackages()).toHaveLength(0);
-
     expect(errSpy).toHaveBeenCalled();
   });
 });
 
 // =========================================================================
-// 5. Re-run on installed package preserves installed_at
+// 5. Cancel — committed command, before fetch completed
+// =========================================================================
+
+describe("cancel — committed, pre-fetch", () => {
+  test("returns 130; one cancelled invocation with null sha/package; no packages row", async () => {
+    const exitCode = await runInstall(
+      { kind: "direct", raw: installCmd("/cancelme.sh") },
+      {
+        runSession: async (s) => {
+          const { raw, parsed } = directStart(s);
+          return { kind: "cancel", raw, parsed, fetched: null };
+        },
+      },
+    );
+    expect(exitCode).toBe(130);
+
+    const inv = onlyRow(allInvocations());
+    expect(inv.outcome).toBe("cancelled");
+    expect(inv.package_id).toBeNull();
+    expect(inv.sha256).toBeNull();
+    expect(inv.url).toBe(sourceUrl("/cancelme.sh"));
+    expect(inv.install_command_json).toBeTruthy();
+    expect(inv.exit_code).toBeNull();
+    expect(inv.error_message).toBeNull();
+    expect(inv.raw_input).toBe(installCmd("/cancelme.sh"));
+
+    expect(allPackages()).toHaveLength(0);
+  });
+});
+
+// =========================================================================
+// 6. Cancel — committed command, after fetch completed
+// =========================================================================
+
+describe("cancel — committed, post-fetch", () => {
+  test("returns 130; cancelled row carries the fetched sha; no CAS write; no package", async () => {
+    const body = bytes("echo never run\n");
+    const hash = sha256Hex(body);
+
+    const exitCode = await runInstall(
+      { kind: "direct", raw: installCmd("/cancel-after.sh") },
+      {
+        runSession: async (s) => {
+          const { raw, parsed } = directStart(s);
+          return { kind: "cancel", raw, parsed, fetched: fetchedFor(body) };
+        },
+      },
+    );
+    expect(exitCode).toBe(130);
+
+    const inv = onlyRow(allInvocations());
+    expect(inv.outcome).toBe("cancelled");
+    expect(inv.sha256).toBe(hash);
+    expect(inv.package_id).toBeNull();
+    expect(inv.exit_code).toBeNull();
+
+    expect(allPackages()).toHaveLength(0);
+    // Cancel does NOT save to the CAS — the slot for these bytes stays empty.
+    expect(readScript(hash)).toBeNull();
+  });
+});
+
+// =========================================================================
+// 7. Cancel — interactive paste with no committed command
+// =========================================================================
+
+describe("cancel — interactive paste (no command)", () => {
+  test("returns 0; zero invocation rows; zero packages", async () => {
+    const exitCode = await runInstall(
+      { kind: "interactive" },
+      { runSession: async () => ({ kind: "cancel", raw: null, parsed: null, fetched: null }) },
+    );
+    expect(exitCode).toBe(0);
+
+    expect(allInvocations()).toHaveLength(0);
+    expect(allPackages()).toHaveLength(0);
+  });
+});
+
+// =========================================================================
+// 8. Re-run on installed package preserves installed_at
 // =========================================================================
 
 describe("re-run preserves first installed_at", () => {
   test("second successful run does not bump installed_at; last_ran_at advances", async () => {
     const body = bytes("echo ok\n");
-    routes["/idempotent.sh"] = () => new Response(body, { status: 200 });
 
-    expect(await runInstall(installCmd("/idempotent.sh"))).toBe(0);
+    expect(
+      await runInstall({ kind: "direct", raw: installCmd("/idempotent.sh") }, runWith(body)),
+    ).toBe(0);
     const firstPkg = onlyRow(allPackages());
     const firstInstalledAt = firstPkg.installed_at as string;
     const firstLastRanAt = firstPkg.last_ran_at as string;
     expect(firstInstalledAt).toBeTruthy();
 
-    // Force a measurable wall-clock gap so ISO strings differ (we want to
-    // observe that installed_at is pinned and last_ran_at moves).
+    // Force a measurable wall-clock gap so ISO strings differ.
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(await runInstall(installCmd("/idempotent.sh"))).toBe(0);
+    expect(
+      await runInstall({ kind: "direct", raw: installCmd("/idempotent.sh") }, runWith(body)),
+    ).toBe(0);
     const secondPkg = onlyRow(allPackages());
     expect(secondPkg.installed_at).toBe(firstInstalledAt);
-    // last_ran_at strictly advances.
     expect(secondPkg.last_ran_at).not.toBe(firstLastRanAt);
 
-    // Two invocations now; still one package row.
+    // Two invocations now; still one package row (same parsed.url → same row).
     expect(allInvocations()).toHaveLength(2);
     expect(allPackages()).toHaveLength(1);
   });
 });
 
 // =========================================================================
-// 6. Re-run with new sha updates current_sha256
+// 9. Re-run with new sha updates current_sha256
 // =========================================================================
 
 describe("re-run with new sha", () => {
@@ -260,19 +365,20 @@ describe("re-run with new sha", () => {
     const v1 = bytes("echo v1\n");
     const v2 = bytes("echo v2-updated\n");
 
-    routes["/upgrade.sh"] = () => new Response(v1, { status: 200 });
-    expect(await runInstall(installCmd("/upgrade.sh"))).toBe(0);
+    expect(await runInstall({ kind: "direct", raw: installCmd("/upgrade.sh") }, runWith(v1))).toBe(
+      0,
+    );
     expect(onlyRow(allPackages()).current_sha256).toBe(sha256Hex(v1));
 
-    // Swap the fixture's bytes — same URL, new content.
-    routes["/upgrade.sh"] = () => new Response(v2, { status: 200 });
-    expect(await runInstall(installCmd("/upgrade.sh"))).toBe(0);
+    expect(await runInstall({ kind: "direct", raw: installCmd("/upgrade.sh") }, runWith(v2))).toBe(
+      0,
+    );
     expect(onlyRow(allPackages()).current_sha256).toBe(sha256Hex(v2));
   });
 });
 
 // =========================================================================
-// 7. Failure on installed does NOT downgrade
+// 10. Failure on installed does NOT downgrade
 // =========================================================================
 
 describe("installed → failed exec preserves installed status", () => {
@@ -280,23 +386,22 @@ describe("installed → failed exec preserves installed status", () => {
     const okBody = bytes("echo good\n");
     const badBody = bytes("exit 3\n");
 
-    routes["/sometimes.sh"] = () => new Response(okBody, { status: 200 });
-    expect(await runInstall(installCmd("/sometimes.sh"))).toBe(0);
+    expect(
+      await runInstall({ kind: "direct", raw: installCmd("/sometimes.sh") }, runWith(okBody)),
+    ).toBe(0);
     const installedPkg = onlyRow(allPackages());
     expect(installedPkg.status).toBe("installed");
     expect(installedPkg.current_sha256).toBe(sha256Hex(okBody));
 
-    // Swap to a failing script — exec returns non-zero.
-    routes["/sometimes.sh"] = () => new Response(badBody, { status: 200 });
-    expect(await runInstall(installCmd("/sometimes.sh"))).toBe(3);
+    expect(
+      await runInstall({ kind: "direct", raw: installCmd("/sometimes.sh") }, runWith(badBody)),
+    ).toBe(3);
 
     const pkg = onlyRow(allPackages());
     expect(pkg.status).toBe("installed");
-    // current_sha256 NOT bumped to the failing-run's bytes (per spec: only
-    // success refreshes the hash).
+    // current_sha256 NOT bumped to the failing-run's bytes.
     expect(pkg.current_sha256).toBe(sha256Hex(okBody));
 
-    // Both invocations recorded.
     const invs = allInvocations();
     expect(invs).toHaveLength(2);
     const outcomes = invs.map((i) => i.outcome).sort();
@@ -305,101 +410,15 @@ describe("installed → failed exec preserves installed status", () => {
 });
 
 // =========================================================================
-// 8. Step-5 analysis seam (env-gated LLM analysis)
-// =========================================================================
-//
-// `SWEEP_TEST_RESPONSES` is sweep's own test-provider contract (wrap-core
-// reads no env vars — test-provider selection is consumer policy). Set →
-// step 5 runs a canned analysis conversation end to end; absent → step 5
-// stays a no-op. The preload deletes the var before every test, so every
-// other test in this file pins the no-op path for free.
-//
-// The invariant under test throughout: analysis NEVER changes install
-// semantics — exit codes, invocation rows, and package status belong to
-// the exec path alone, whatever the analysis does.
-
-describe("step-5 analysis (env-gated)", () => {
-  /** Joined console.error lines, mirroring main.test.ts's logLines(). */
-  const errLines = (): string[] =>
-    errSpy.mock.calls.map((call) => (call as unknown[]).map((a) => String(a)).join(" "));
-
-  test("canned summary: install succeeds and a sweep: line carries the summary", async () => {
-    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
-    process.env.SWEEP_TEST_RESPONSES = JSON.stringify({
-      summary: "Downloads a binary to /usr/local/bin.",
-    });
-
-    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
-
-    const line = errLines().find((l) => l.includes("Downloads a binary to /usr/local/bin."));
-    expect(line).toBeDefined();
-    expect(line).toStartWith("sweep:");
-
-    // Install semantics unchanged by the analysis.
-    expect(onlyRow(allPackages()).status).toBe("installed");
-    const inv = onlyRow(allInvocations());
-    expect(inv.outcome).toBe("ran");
-    expect(inv.exit_code).toBe(0);
-  });
-
-  test("provider error in playback: install still succeeds; sweep: failure line surfaced", async () => {
-    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
-    // JSON-array form — also proves the list shape of the env value parses.
-    process.env.SWEEP_TEST_RESPONSES = JSON.stringify(["ERROR: model exploded"]);
-
-    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
-
-    const line = errLines().find((l) => l.includes("model exploded"));
-    expect(line).toBeDefined();
-    expect(line).toStartWith("sweep:");
-
-    expect(onlyRow(allPackages()).status).toBe("installed");
-    expect(onlyRow(allInvocations()).outcome).toBe("ran");
-  });
-
-  test("unparseable canned response: parse retry exhausts; install still succeeds", async () => {
-    routes["/analyzed.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
-    // Not JSON → taken verbatim as a single repeating response → both send
-    // attempts fail to parse → typed parse error → caught and surfaced.
-    process.env.SWEEP_TEST_RESPONSES = "this is not json";
-
-    expect(await runInstall(installCmd("/analyzed.sh"))).toBe(0);
-
-    const line = errLines().find((l) => l.includes("script analysis failed"));
-    expect(line).toBeDefined();
-    expect(line).toStartWith("sweep:");
-
-    expect(onlyRow(allPackages()).status).toBe("installed");
-    expect(onlyRow(allInvocations()).outcome).toBe("ran");
-  });
-
-  test("without SWEEP_TEST_RESPONSES, a happy-path install makes zero console.error calls (no analysis lines)", async () => {
-    // The preload wiped the var; this pins the gate: step 5 is a strict
-    // no-op for real users (createLlm never runs, no analysis line is
-    // printed). Scope: console.error calls only — the spawned script's own
-    // stderr is out of frame.
-    routes["/plain.sh"] = () => new Response(bytes("echo ok\n"), { status: 200 });
-
-    expect(await runInstall(installCmd("/plain.sh"))).toBe(0);
-
-    expect(errSpy).not.toHaveBeenCalled();
-    expect(onlyRow(allPackages()).status).toBe("installed");
-  });
-});
-
-// =========================================================================
-// 9. Transactional invariant
+// 11. Transactional invariant
 // =========================================================================
 
 describe("transactional invariant", () => {
   test("after happy-path runInstall, package + invocation are observably committed", async () => {
     const body = bytes("echo tx\n");
-    routes["/tx.sh"] = () => new Response(body, { status: 200 });
 
-    expect(await runInstall(installCmd("/tx.sh"))).toBe(0);
+    expect(await runInstall({ kind: "direct", raw: installCmd("/tx.sh") }, runWith(body))).toBe(0);
 
-    // Both rows must be queryable post-call. (If the transaction were never
-    // committed, the SELECTs below would come back empty.)
     const pkg = onlyRow(allPackages());
     const inv = onlyRow(allInvocations());
     expect(pkg.status).toBe("installed");

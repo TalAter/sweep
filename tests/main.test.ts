@@ -3,16 +3,24 @@
  * with synthesized `process.argv`, await it, then assert on `process.exitCode`
  * plus observable side effects (DB rows, console output).
  *
+ * Installs that reach the alt-screen session are driven via an injected
+ * `runSession` (the `RunInstallDeps` seam `main` forwards to `runInstall`), so
+ * the real fetch + Ink stack never runs. The injected decision echoes the
+ * `raw`/`parsed` that runInstall already parsed and supplies canned bytes.
+ *
  * `process.argv` and `process.exitCode` are saved/restored per test to keep
  * leakage to zero — Bun runs test files serially in one process.
  *
  * `console.log` / `console.error` are mocked so command output doesn't leak
  * into the test report.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { stripAnsi } from "wrap-core/ansi";
+import type { FetchedScript } from "../src/installer/fetch.ts";
+import type { RunInstallDeps } from "../src/installer/install.ts";
 import { main } from "../src/main.ts";
 import { ensureDb } from "../src/store/db.ts";
+import type { SessionStart } from "../src/tui/install-session.ts";
 
 // ---- argv / exitCode save-restore ----------------------------------------
 
@@ -43,34 +51,32 @@ afterEach(() => {
   console.error = origConsoleError;
 });
 
-// ---- fixture server (only test 5 needs it) -------------------------------
-
-type Handler = (req: Request) => Response | Promise<Response>;
-const routes: Record<string, Handler> = {};
-let server: ReturnType<typeof Bun.serve>;
-
-beforeAll(() => {
-  server = Bun.serve({
-    port: 0,
-    fetch(req) {
-      const u = new URL(req.url);
-      const handler = routes[u.pathname];
-      return handler ? handler(req) : new Response("not found", { status: 404 });
-    },
-  });
-});
-
-afterAll(() => {
-  server.stop(true);
-});
-
-beforeEach(() => {
-  for (const k of Object.keys(routes)) delete routes[k];
-});
-
 // ---- helpers -------------------------------------------------------------
 
-const url = (path: string): string => `http://localhost:${server.port}${path}`;
+const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+const sha256Hex = (b: Uint8Array): string => {
+  const h = new Bun.CryptoHasher("sha256");
+  h.update(b);
+  return h.digest("hex");
+};
+
+/** Build a `FetchedScript` from raw bytes (a successful fetch result). */
+const fetchedFor = (b: Uint8Array): FetchedScript => ({
+  bytes: b,
+  sha256: sha256Hex(b),
+  finalUrl: "https://localhost/resolved",
+  fetchedAt: new Date().toISOString(),
+  status: 200,
+});
+
+/** A `runSession` that always approves a run with the given bytes. */
+const runWith = (b: Uint8Array): RunInstallDeps => ({
+  runSession: async (s: SessionStart) => {
+    if (s.kind !== "direct") throw new Error("test drives direct mode only");
+    return { kind: "run", raw: s.raw, parsed: s.parsed, fetched: fetchedFor(b) };
+  },
+});
 
 function logLines(): string[] {
   return logSpy.mock.calls.map((call) => call.map((a) => String(a)).join(" "));
@@ -79,6 +85,9 @@ function logLines(): string[] {
 function allPackages(): Array<Record<string, unknown>> {
   return ensureDb().query("SELECT * FROM packages").all() as Array<Record<string, unknown>>;
 }
+
+// Sanity: the test process is non-TTY, so a positional-less run falls through
+// to parse rather than the interactive session.
 
 // =========================================================================
 
@@ -91,10 +100,10 @@ describe("main()", () => {
   });
 
   test("`sweep list` after install renders the slug", async () => {
-    // Seed via the install path so we exercise the same plumbing end-to-end.
-    routes["/seed.sh"] = () => new Response(new TextEncoder().encode("echo ok\n"), { status: 200 });
-    process.argv = ["bun", "/path/to/index.ts", `curl -fsSL ${url("/seed.sh")} | sh`];
-    await main();
+    // Seed via the install path (injected session) so we exercise the same
+    // DB plumbing end-to-end. Slug derives from the URL host stem → "localhost".
+    process.argv = ["bun", "/path/to/index.ts", "curl -fsSL https://localhost/seed.sh | sh"];
+    await main(runWith(bytes("echo ok\n")));
     expect(process.exitCode).toBe(0);
     logSpy.mockClear();
     errSpy.mockClear();
@@ -114,7 +123,6 @@ describe("main()", () => {
       process.stdout.write = origWrite;
     }
     expect(process.exitCode).toBe(0);
-    // Slug + truncated host are both "localhost" (from http://localhost:<port>).
     expect(stripAnsi(chunks.join(""))).toContain("localhost");
   });
 
@@ -133,15 +141,13 @@ describe("main()", () => {
   });
 
   test("`sweep '<curl | sh>'` happy path exits 0 and persists a package row", async () => {
-    routes["/install.sh"] = () =>
-      new Response(new TextEncoder().encode('echo "ok"\nexit 0\n'), { status: 200 });
-    process.argv = ["bun", "/path/to/index.ts", `curl -fsSL ${url("/install.sh")} | sh`];
-    await main();
+    process.argv = ["bun", "/path/to/index.ts", "curl -fsSL https://localhost/install.sh | sh"];
+    await main(runWith(bytes('echo "ok"\nexit 0\n')));
     expect(process.exitCode).toBe(0);
 
     const pkgs = allPackages();
     expect(pkgs).toHaveLength(1);
     expect(pkgs[0]?.status).toBe("installed");
-    expect(pkgs[0]?.source_url).toBe(url("/install.sh"));
+    expect(pkgs[0]?.source_url).toBe("https://localhost/install.sh");
   });
 });

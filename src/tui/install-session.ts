@@ -63,8 +63,15 @@ export type InstallDecision =
     }
   | { kind: "fetch-failed"; raw: string; parsed: InstallCommand; error: FetchScriptError };
 
+/** Where a session begins. Shared with the orchestrator (step 6): in direct
+ *  mode the orchestrator parses the argument up front and hands the parsed
+ *  command in; in interactive mode parse happens inside the session on paste. */
+export type SessionStart =
+  | { kind: "interactive" }
+  | { kind: "direct"; raw: string; parsed: InstallCommand };
+
 export type RunInstallSessionOpts = {
-  start: { kind: "interactive" } | { kind: "direct"; raw: string; parsed: InstallCommand };
+  start: SessionStart;
   // Caller owns appearance resolution: must `setTheme(theme)` first (severity
   // presets read the module-global theme via `getTheme()`) and keep
   // `gradientStops` consistent with `theme`.

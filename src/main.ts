@@ -1,22 +1,20 @@
 import { isTTY } from "wrap-core/ansi";
 import { ensureConfig } from "./config.ts";
 import { ensureSweepHome } from "./fs.ts";
-import { runInstall } from "./installer/install.ts";
+import { type RunInstallDeps, runInstall } from "./installer/install.ts";
 import { dispatch } from "./subcommands/dispatch.ts";
 import { commands } from "./subcommands/registry.ts";
 
-export async function main() {
+export async function main(deps: RunInstallDeps = {}) {
   try {
     ensureSweepHome();
     ensureConfig();
     const positional = process.argv[2] ?? "";
 
-    // Interactive mode: no args + TTY → show dialog for pasting an install command.
+    // Interactive mode: no args + TTY → run the install session for a pasted
+    // command (parse happens inside the session, on paste).
     if (!positional && isTTY()) {
-      const { promptInstallCommand } = await import("./tui/mount.ts");
-      const command = await promptInstallCommand();
-      if (!command) return; // user cancelled
-      process.exitCode = await runInstall(command);
+      process.exitCode = await runInstall({ kind: "interactive" }, deps);
       return;
     }
 
@@ -26,7 +24,7 @@ export async function main() {
     if (verb) {
       process.exitCode = await dispatch(verb.name, process.argv.slice(3));
     } else {
-      process.exitCode = await runInstall(positional);
+      process.exitCode = await runInstall({ kind: "direct", raw: positional }, deps);
     }
   } catch (err) {
     console.error(`sweep: ${err instanceof Error ? err.message : String(err)}`);
