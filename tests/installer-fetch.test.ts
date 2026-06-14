@@ -214,3 +214,24 @@ describe("network errors", () => {
     }
   });
 });
+
+// =========================================================================
+// External abort signal (the session controller threads cancel into fetch)
+// =========================================================================
+
+describe("external abort signal", () => {
+  test("a pre-aborted external signal rejects the fetch with a FetchScriptError", async () => {
+    // The session controller (step 5) cancels an in-flight fetch by aborting its
+    // own controller. Proves the external signal reaches the underlying fetch: a
+    // signal already aborted before the call must abort the request immediately
+    // (rather than running to completion or hanging). The reason is allowed to be
+    // `timeout` — an abort is indistinguishable from the internal timeout abort,
+    // and the session layer discards the error anyway (cancel wins).
+    const body = new TextEncoder().encode("#!/bin/sh\necho hi\n");
+    routes["/abortme"] = () => new Response(body, { status: 200 });
+
+    await expect(
+      fetchScript(url("/abortme"), { signal: AbortSignal.abort() }),
+    ).rejects.toBeInstanceOf(FetchScriptError);
+  });
+});

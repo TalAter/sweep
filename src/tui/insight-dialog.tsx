@@ -141,7 +141,10 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
   );
 
   const spinnerActive = isLoading;
-  const { frame: spinnerIndex } = useAnimation({ interval: SPINNER_INTERVAL, isActive: spinnerActive });
+  const { frame: spinnerIndex } = useAnimation({
+    interval: SPINNER_INTERVAL,
+    isActive: spinnerActive,
+  });
   const spinnerFrame = SPINNER_FRAMES[spinnerIndex % SPINNER_FRAMES.length] ?? "";
 
   const source = state.phase === "loading" ? state.source : state.view.source;
@@ -155,7 +158,10 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
   };
 
   return (
-    <Dialog gradientStops={frameStops(state, neutralGradient)} naturalContentWidth={NATURAL_CONTENT_WIDTH}>
+    <Dialog
+      gradientStops={frameStops(state, neutralGradient)}
+      naturalContentWidth={NATURAL_CONTENT_WIDTH}
+    >
       {/* Header line: severity pill / banner / bare source. */}
       {view?.state === "caution" || view?.state === "danger" ? (
         <Box>

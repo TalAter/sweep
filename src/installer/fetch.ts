@@ -11,6 +11,10 @@
  *     headers phase and the body read. Override from tests via `__setTimeoutMs`
  *     (same convention as `db.ts:__resetForTests`). Without covering the body
  *     read a slow-loris server could trickle bytes forever.
+ *   - An optional EXTERNAL `signal` (the install session's cancel) is OR'd into
+ *     that same controller: when either the timeout or the caller's signal fires,
+ *     the in-flight `fetch`/body-read aborts. An external abort is classified the
+ *     same as a timeout (the session layer discards it — cancel wins).
  *   - 5 MiB body cap. Refuse early via `Content-Length` if the server is honest;
  *     otherwise enforce post-read. Install scripts are tiny; an unbounded read
  *     is a footgun.
@@ -49,9 +53,22 @@ export function __setTimeoutMs(ms: number): void {
   timeoutMs = ms;
 }
 
-export async function fetchScript(url: string): Promise<FetchedScript> {
+export async function fetchScript(
+  url: string,
+  opts?: { signal?: AbortSignal },
+): Promise<FetchedScript> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Fold the caller's external signal into our controller so a session cancel
+  // aborts the in-flight request. Already-aborted → abort immediately.
+  const external = opts?.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external?.aborted) {
+    controller.abort();
+  } else {
+    external?.addEventListener("abort", onExternalAbort, { once: true });
+  }
 
   try {
     let response: Response;
@@ -113,6 +130,7 @@ export async function fetchScript(url: string): Promise<FetchedScript> {
     };
   } finally {
     clearTimeout(timer);
+    external?.removeEventListener("abort", onExternalAbort);
   }
 }
 

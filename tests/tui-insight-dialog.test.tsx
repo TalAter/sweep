@@ -16,7 +16,10 @@ const SAFE_BEHAVIORS: Behavior[] = [
   { description: "Install to /usr/local/bin/foo", sudo: true },
 ];
 
-function renderDialog(state: InsightDialogState, handlers?: { onRun?: () => void; onCancel?: () => void }) {
+function renderDialog(
+  state: InsightDialogState,
+  handlers?: { onRun?: () => void; onCancel?: () => void },
+) {
   return render(
     <ThemeProvider theme={DARK_CORE} nerdFonts={false}>
       <InsightDialog

@@ -93,8 +93,13 @@ const NO_PROVIDER_MESSAGE = "No LLM provider configured — no analysis to show.
  * strips delivery prefixes and keeps only the first host label; the source line
  * wants the full host + path. If the URL can't be parsed, the raw string passes
  * through unchanged.
+ *
+ * Exported because the loading phase of the dialog needs the SAME source string
+ * as the resolved view but has no `AnalysisResult` yet — single source of truth
+ * for source formatting across both phases (the step-5 controller derives it
+ * from `parsed.url` for the loading state).
  */
-function sourceDisplay(sourceUrl: string): string {
+export function deriveSource(sourceUrl: string): string {
   let parsed: URL;
   try {
     parsed = new URL(sourceUrl);
@@ -106,7 +111,7 @@ function sourceDisplay(sourceUrl: string): string {
 }
 
 export function deriveInsightView(result: AnalysisResult, sourceUrl: string): InsightView {
-  const source = sourceDisplay(sourceUrl);
+  const source = deriveSource(sourceUrl);
 
   if (result.kind === "noProvider") {
     return { state: "no-llm", source, message: NO_PROVIDER_MESSAGE, runAffordance: "button" };
