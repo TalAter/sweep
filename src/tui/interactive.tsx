@@ -55,7 +55,7 @@ export function InteractiveDialog({
   };
 
   return (
-    <Dialog gradientStops={gradientStops} naturalContentWidth={50}>
+    <Dialog gradientStops={gradientStops} sizeTo={[50]}>
       {(_innerWidth: number) => (
         <>
           <Box marginBottom={1}>

@@ -36,6 +36,20 @@ function resolved(view: InsightView): InsightDialogState {
   return { phase: "resolved", view };
 }
 
+// Widest visible span in a rendered frame = the dialog's border width. The outer
+// centering box pads each line with spaces; trimming leading/trailing space leaves
+// the dialog's own width (the border line spans corner-to-corner = totalWidth).
+function frameWidth(frame: string): number {
+  let max = 0;
+  for (const raw of stripAnsi(frame).split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    const start = line.search(/\S/);
+    if (start === -1) continue;
+    max = Math.max(max, line.length - start);
+  }
+  return max;
+}
+
 beforeEach(() => {
   setTheme(DARK_CORE);
 });
@@ -152,6 +166,30 @@ describe("InsightDialog — content per state", () => {
     expect(text).toContain("example.com/install.sh");
     expect(text).toContain("Analyzing");
     expect(text).not.toMatch(/\bRun\b/);
+  });
+});
+
+describe("InsightDialog — width", () => {
+  test("loading stays compact — short content doesn't blow the box out to full width", () => {
+    const { lastFrame } = renderDialog({ phase: "loading", source: "example.com/install.sh" });
+    expect(frameWidth(lastFrame() ?? "")).toBeLessThanOrEqual(60);
+  });
+
+  test("grows to ~terminal width so long analysis prose wraps wide, not into a narrow tall column", () => {
+    const { lastFrame } = renderDialog(
+      resolved({
+        state: "clear",
+        source: "example.com/install.sh",
+        verdict:
+          "Standard vendor installer that downloads a release tarball, verifies its checksum, and drops the binary into a directory on PATH.",
+        flags: [],
+        behaviors: SAFE_BEHAVIORS,
+        runAffordance: "button",
+      }),
+    );
+    // ink-testing-library renders at 100 columns; the dialog should fill it
+    // (minus margin/border), not sit at the old fixed ~58.
+    expect(frameWidth(lastFrame() ?? "")).toBeGreaterThanOrEqual(90);
   });
 });
 

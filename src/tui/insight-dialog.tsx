@@ -29,11 +29,15 @@ import { useState } from "react";
 import type { Color } from "wrap-core/ansi";
 import { resolveColorHex } from "wrap-core/ansi";
 import { SPINNER_FRAMES, SPINNER_INTERVAL } from "wrap-core/chrome";
+import { stringWidth } from "wrap-core/text";
 import {
   ActionBar,
   type ActionItem,
+  actionBarWidth,
   Dialog,
   Pill,
+  pillWidth,
+  type SizeBasis,
   TextInput,
   useKeyBindings,
   useNerdFonts,
@@ -56,9 +60,88 @@ export type InsightDialogProps = {
 };
 
 const CONFIRM_PROMPT = `Type '${CONFIRM_WORD}' to run:`;
-// Natural content width: wide enough for the longest fixed line — the
-// `Appears to do (not exhaustive):` label and the `Type 'install' to run:` prompt.
-const NATURAL_CONTENT_WIDTH = 54;
+
+// Fixed chrome the renderer adds around the model's text — defined once and shared
+// by the JSX and by `insightContentWidth` so the measured width can't drift from
+// what's actually drawn.
+const FLAGS_LABEL = "Flags:";
+const FLAG_PREFIX = " ⚠ ";
+const BEHAVIORS_LABEL = "Appears to do (not exhaustive):";
+const BEHAVIOR_PREFIX = " • ";
+const SUDO_SUFFIX = "  (sudo)";
+const BANNER_PREFIX = "⚠ ";
+const PILL_GAP = "  "; // between the severity pill and the source on the header line
+const ANALYZING_LABEL = "Analyzing…";
+
+// Action sets — shared by the JSX and by `insightSizeTo`'s measurement so the bar
+// can never be wider than the dialog it sits in.
+const CANCEL_ONLY_ACTIONS: ActionItem[] = [{ glyph: "Esc", label: "Cancel" }];
+const BUTTON_ACTIONS: ActionItem[] = [
+  { glyph: "Esc", label: "Cancel" },
+  { glyph: "Enter", label: "Run", primary: true },
+];
+const BUTTON_DIVIDER_AFTER = [0]; // a divider after Cancel only
+
+// Aesthetic floor on the dialog width — the smallest it may get before the
+// terminal clamp. Not an action-bar proxy: the bar is measured below; this just
+// stops a terse loading/verdict box from looking cramped.
+const MIN_CONTENT_WIDTH = 44;
+
+/**
+ * The lines and pre-measured widths the current state will render — fed to
+ * `Dialog` as `sizeTo`. Plain text goes in as strings (Dialog measures them); the
+ * pill header, the spinner line, and the action bar go in as numbers (already
+ * measured, since they're not plain text). Dialog takes the max, floors at
+ * `MIN_CONTENT_WIDTH`, and clamps to the terminal — so the box is compact while
+ * analyzing and grows with the analysis prose, capping at screen width.
+ */
+function insightSizeTo(state: InsightDialogState, nerd: boolean): SizeBasis[] {
+  if (state.phase === "loading") {
+    return [
+      state.source,
+      2 + stringWidth(ANALYZING_LABEL), // spinner glyph + space + label
+      actionBarWidth(CANCEL_ONLY_ACTIONS),
+    ];
+  }
+
+  const { view } = state;
+  const basis: SizeBasis[] = [];
+
+  // Header line.
+  if (view.state === "caution" || view.state === "danger") {
+    const pill = getSeverityPreset(view.state).pill;
+    basis.push(pillWidth([pill], nerd, false) + stringWidth(PILL_GAP + view.source));
+  } else if (view.state === "manipulation") {
+    basis.push(BANNER_PREFIX + view.banner, view.source);
+  } else {
+    basis.push(view.source);
+  }
+
+  // Body.
+  if (view.state === "no-llm" || view.state === "analysis-failed") {
+    basis.push(view.message);
+  } else {
+    basis.push(view.verdict);
+    if (view.flags.length > 0) {
+      basis.push(FLAGS_LABEL, ...view.flags.map((flag) => FLAG_PREFIX + flag));
+    }
+    if (view.behaviors.length > 0) {
+      basis.push(
+        BEHAVIORS_LABEL,
+        ...view.behaviors.map((b) => BEHAVIOR_PREFIX + b.description + (b.sudo ? SUDO_SUFFIX : "")),
+      );
+    }
+  }
+
+  // Action area.
+  if (view.runAffordance === "type-confirm") {
+    basis.push(actionBarWidth(CANCEL_ONLY_ACTIONS), CONFIRM_PROMPT);
+  } else {
+    basis.push(actionBarWidth(BUTTON_ACTIONS, BUTTON_DIVIDER_AFTER));
+  }
+
+  return basis;
+}
 
 /** Frame stops: severity tint only for caution/danger; neutral for everything else. */
 function frameStops(state: InsightDialogState, neutral: Color[]): Color[] {
@@ -75,12 +158,12 @@ function BehaviorList({ behaviors, color }: { behaviors: Behavior[]; color: stri
   if (behaviors.length === 0) return null;
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={color}>Appears to do (not exhaustive):</Text>
+      <Text color={color}>{BEHAVIORS_LABEL}</Text>
       {behaviors.map((b) => (
         <Text key={b.description} color={color}>
-          {" • "}
+          {BEHAVIOR_PREFIX}
           {b.description}
-          {b.sudo ? "  (sudo)" : ""}
+          {b.sudo ? SUDO_SUFFIX : ""}
         </Text>
       ))}
     </Box>
@@ -91,10 +174,10 @@ function FlagList({ flags, color }: { flags: string[]; color: string }) {
   if (flags.length === 0) return null;
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={color}>Flags:</Text>
+      <Text color={color}>{FLAGS_LABEL}</Text>
       {flags.map((flag) => (
         <Text key={flag} color={color}>
-          {" ⚠ "}
+          {FLAG_PREFIX}
           {flag}
         </Text>
       ))}
@@ -160,17 +243,18 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
   return (
     <Dialog
       gradientStops={frameStops(state, neutralGradient)}
-      naturalContentWidth={NATURAL_CONTENT_WIDTH}
+      sizeTo={insightSizeTo(state, nerdFonts)}
+      minContentWidth={MIN_CONTENT_WIDTH}
     >
       {/* Header line: severity pill / banner / bare source. */}
       {view?.state === "caution" || view?.state === "danger" ? (
         <Box>
           <Pill {...getSeverityPreset(view.state).pill} nerdFonts={nerdFonts} />
-          <Text color={bodyColor}>{`  ${source}`}</Text>
+          <Text color={bodyColor}>{`${PILL_GAP}${source}`}</Text>
         </Box>
       ) : view?.state === "manipulation" ? (
         <Box flexDirection="column">
-          <Text color={bannerColor} bold>{`⚠ ${view.banner}`}</Text>
+          <Text color={bannerColor} bold>{`${BANNER_PREFIX}${view.banner}`}</Text>
           <Text color={bodyColor}>{source}</Text>
         </Box>
       ) : (
@@ -180,7 +264,7 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
       {/* Body. */}
       {isLoading ? (
         <Box marginTop={1}>
-          <Text color={bodyColor}>{`${spinnerFrame} Analyzing…`}</Text>
+          <Text color={bodyColor}>{`${spinnerFrame} ${ANALYZING_LABEL}`}</Text>
         </Box>
       ) : view && (view.state === "no-llm" || view.state === "analysis-failed") ? (
         <Box marginTop={1}>
@@ -199,10 +283,10 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
       {/* Action area. */}
       <Box marginTop={1}>
         {isLoading ? (
-          <ActionBar items={[{ glyph: "Esc", label: "Cancel" }]} />
+          <ActionBar items={CANCEL_ONLY_ACTIONS} />
         ) : typeConfirm ? (
           <Box flexDirection="column">
-            <ActionBar items={[{ glyph: "Esc", label: "Cancel" }]} />
+            <ActionBar items={CANCEL_ONLY_ACTIONS} />
             <Box marginTop={1}>
               <Text color={supportingColor}>{CONFIRM_PROMPT}</Text>
             </Box>
@@ -213,14 +297,13 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
             />
           </Box>
         ) : (
-          <ActionBar items={BUTTON_ACTIONS} focusedIndex={focusedIndex} dividerAfter={[0]} />
+          <ActionBar
+            items={BUTTON_ACTIONS}
+            focusedIndex={focusedIndex}
+            dividerAfter={BUTTON_DIVIDER_AFTER}
+          />
         )}
       </Box>
     </Dialog>
   );
 }
-
-const BUTTON_ACTIONS: ActionItem[] = [
-  { glyph: "Esc", label: "Cancel" },
-  { glyph: "Enter", label: "Run", primary: true },
-];
