@@ -2,7 +2,7 @@
 name: architecture
 description: Sweep's module shape, data flow, and where v1 plugs in. Code is the source of truth for internals; this is the bird's-eye view.
 Source: src/
-Last-synced: 110435b
+Last-synced: 0c2ef68
 ---
 
 # Architecture
@@ -30,15 +30,16 @@ Sweep home is `~/.sweep/` (override `$SWEEP_HOME`):
 
 - `sweep.db` — SQLite. Two tables: `packages` (one row per tracked tool, lifecycle status) and `invocations` (one row per `sweep "<cmd>"` run, including parse failures, fetch failures, and cancels).
 - `cache/scripts/<sha256>` — raw script bytes, content-addressed. Identical scripts dedupe. `wx` (O_EXCL) writes give concurrent installers atomic dedup with no TOCTOU window.
+- `config.jsonc` — user-authored JSONC, the provider-bearing config read at startup (`ensureConfig()`, overlaid by the `SWEEP_CONFIG` JSON env var). Sweep reads it but does not yet write it (no wizard).
 
-No JSONL log. No config file in v0.
+No JSONL log.
 
 ## v1 seams
 
 The places the architecture stretches without restructuring:
 
 - **New verbs.** Add a file under `subcommands/` and register it. Install stays the implicit fallback.
-- **Analysis + dialog.** Built. The install session (`tui/install-session.ts`) mounts one alt-screen and rerenders it in place: paste→loading→resolved for interactive mode, loading→resolved for direct mode (parse already happened). Beneath the loading spinner it runs fetch + two-pass analysis (`installer/analyze.ts`) — an analysis pass and a manipulation pass; the verdict is trusted only when the manipulation pass came back provably clean — then swaps to the resolved `InsightDialog`, the approval gate. What's still a *seam*: the **multi-source frame** — the LLM is the first and only wired insight source; deterministic signals (domain age, hash DBs, registry, diff-vs-prior) plug into the same dialog frame later — and the **production provider config** (only the `SWEEP_TEST_RESPONSES` test seam exists today; `ensureConfig()` still returns `{}`, so the no-LLM state is reachable only via that seam).
-- **Config / first-run wizard.** `ensureConfig()` is a stub returning `{}`; the call site won't change shape when v1 reads from disk.
+- **Analysis + dialog.** Built. The install session (`tui/install-session.ts`) mounts one alt-screen and rerenders it in place: paste→loading→resolved for interactive mode, loading→resolved for direct mode (parse already happened). Beneath the loading spinner it runs fetch + two-pass analysis (`installer/analyze.ts`) — an analysis pass and a manipulation pass; the verdict is trusted only when the manipulation pass came back provably clean — then swaps to the resolved `InsightDialog`, the approval gate. The analysis provider is resolved per run (`installer/analyze.ts` `resolveAnalysisProvider`): the `SWEEP_TEST_RESPONSES` test seam wins; otherwise the configured default provider drives a real LLM via `wrap-core/config` (`resolveProvider` + `llmFromResolved`). The no-provider dialog state is reached when config names no usable provider. What's still a *seam*: the **multi-source frame** — the LLM is the first and only wired insight source; deterministic signals (domain age, hash DBs, registry, diff-vs-prior) plug into the same dialog frame later — and the **first-run wizard** that auto-creates config when absent (mirroring wrap).
+- **Config / first-run wizard.** `ensureConfig()` loads `config.jsonc` from disk via `wrap-core/config` (see [[wrap-core-api]]). The remaining seam is the first-run wizard that writes config when absent (mirroring wrap); the call site is unchanged when it lands.
 - **Registry / canonical naming.** `slugFromUrl` has a stable signature; v1 swaps the body for a registry call.
 - **Schema migrations.** `db.ts` reads `schema_meta(version)` and dispatches additive migrations — bump the version and append a migration block.
