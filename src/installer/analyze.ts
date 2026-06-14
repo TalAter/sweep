@@ -187,7 +187,9 @@ export function resolveAnalysisProvider(): AnalysisProvider {
         (Array.isArray(parsed.analysis) && parsed.analysis.length === 0) ||
         (Array.isArray(parsed.manipulation) && parsed.manipulation.length === 0)
       ) {
-        throw new Error("SWEEP_TEST_RESPONSES analysis/manipulation must have at least one response");
+        throw new Error(
+          "SWEEP_TEST_RESPONSES analysis/manipulation must have at least one response",
+        );
       }
       return { kind: "test", analysis: parsed.analysis, manipulation: parsed.manipulation };
     } catch (err) {

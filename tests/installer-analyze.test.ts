@@ -217,7 +217,10 @@ describe("analyzeScript — two-pass core", () => {
     // RESOLVED provider whose live call fails. That is a failed PASS (the script
     // was analyzed, the call just failed), never noProvider/broken. Both entries
     // error so the outcome is order-independent across the shared cursor.
-    const llm = createLlm({ name: "test", responses: ["ERROR: model exploded", "ERROR: model exploded"] });
+    const llm = createLlm({
+      name: "test",
+      responses: ["ERROR: model exploded", "ERROR: model exploded"],
+    });
 
     const result = await analyzeScript({ url: URL, scriptBytes: SCRIPT }, { kind: "real", llm });
 
