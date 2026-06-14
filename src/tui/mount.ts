@@ -1,16 +1,7 @@
-import type { Color } from "wrap-core/ansi";
 import { resolveAppearance, resolveTheme, setTheme } from "wrap-core/theme";
 import { openDialog, preloadDialogRuntime } from "wrap-core/tui";
 import { sweepFs } from "../fs.ts";
-
-const DARK_GRADIENT: Color[] = [
-  [80, 160, 255],
-  [40, 60, 100],
-];
-const LIGHT_GRADIENT: Color[] = [
-  [25, 90, 190],
-  [170, 170, 195],
-];
+import { DARK_GRADIENT, LIGHT_GRADIENT } from "./theme.ts";
 
 export async function promptInstallCommand(): Promise<string | null> {
   const appearance = await resolveAppearance({ envVarName: "SWEEP_THEME", fs: sweepFs });
