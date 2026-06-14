@@ -7,28 +7,30 @@
  * dialog (the analysis-failed state surfaces in the dialog, not on stderr —
  * a `sweep:` line would be hidden behind the live alt-screen).
  *
- * Provider source this phase: only the `SWEEP_TEST_RESPONSES` test seam. See
- * `analyzeScript`'s doc for its `{ analysis, manipulation }` shape and the
- * absent-vs-malformed degradation contract.
+ * Provider source: `resolveAnalysisProvider` (also exported, independently
+ * tested) decides which provider — if any — backs a run. The test seam wins:
+ * a present-and-valid `SWEEP_TEST_RESPONSES` selects canned playback; a
+ * present-but-broken one is a failed analysis (not a missing provider). With no
+ * test seam, the real provider comes from `ensureConfig()` →
+ * `resolveProvider` → `llmFromResolved`; ANY resolution/config-time failure
+ * (no defaultProvider, unknown/invalid entry, no model, an unset `$ENV_VAR`
+ * key, malformed config) means "no usable provider" → the dialog's noProvider
+ * state. A provider that resolves but whose live call later fails is a failed
+ * pass, not noProvider. Real sends are bound by `ANALYSIS_TIMEOUT_MS` combined
+ * with the caller's cancel signal so a hung provider can't stall an install.
  */
 
+import { llmFromResolved, resolveProvider } from "wrap-core/config";
 import { createLlm, type Llm, type TestResponses } from "wrap-core/llm";
 import { z } from "zod";
+import { ensureConfig } from "../config.ts";
 
-// Future default, deliberately unreachable this promotion: a hardcoded
-// real provider whose key resolves through core's `$ENV_VAR` indirection.
-// To flip analysis on for real users, build this config when
-// SWEEP_TEST_RESPONSES is absent (instead of returning early below) — and
-// decide then what a missing key does, because `createLlm` throws
-// `LlmConfigError` when the named variable is unset. Also pass
-// `AbortSignal.timeout(...)` to `send` (core's send accepts a signal) so a
-// hung provider can't stall installs.
-//
-//   const PRODUCTION_CONFIG: LlmConfig = {
-//     name: "anthropic",
-//     model: "claude-opus-4-8",
-//     apiKey: "$ANTHROPIC_API_KEY",
-//   };
+/**
+ * Per-pass ceiling on a real provider's `send`. Combined with the caller's
+ * cancel signal so a hung or slow provider can't stall an install behind the
+ * live alt-screen. The test seam never uses this — canned playback can't hang.
+ */
+const ANALYSIS_TIMEOUT_MS = 60_000;
 
 // =========================================================================
 // Two-pass analysis (LLM-insights dialog)
@@ -126,6 +128,84 @@ const manipulationSchema = z.object({ manipulationDetected: z.boolean() });
 
 const bareMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/**
+ * Which provider — if any — backs an analysis run, resolved from env + config.
+ * `none` → the dialog's noProvider state; `broken` → an attempted-but-failed
+ * analysis (the test seam exists but is unusable); `test` → canned playback,
+ * one response set per pass; `real` → one shared `Llm` handle the two passes
+ * open independent conversations on.
+ */
+export type AnalysisProvider =
+  | { kind: "none" }
+  | { kind: "broken"; reason: string }
+  | { kind: "test"; analysis: TestResponses; manipulation: TestResponses }
+  | { kind: "real"; llm: Llm };
+
+/**
+ * Pick the analysis provider, NEVER throwing. The test seam takes precedence:
+ * a non-blank `SWEEP_TEST_RESPONSES` is parsed exactly as the two-pass contract
+ * demands (valid → `test`; present-but-malformed → `broken`, preserving the
+ * "env present but unusable is an attempted analysis, not a missing provider"
+ * behavior). A blank value (`SWEEP_TEST_RESPONSES=`) counts as no seam at all.
+ * With no test seam, resolve a real provider from config; ANY
+ * resolution/config-time failure — no defaultProvider, provider not found,
+ * invalid entry, no model, an unset `$ENV_VAR` key (`createLlm` throws
+ * `LlmConfigError`), or a malformed config — collapses to `none` (no usable
+ * provider). A provider that resolves but whose live call later fails is NOT
+ * handled here; that surfaces as a failed pass inside `analyzeScript`.
+ */
+export function resolveAnalysisProvider(): AnalysisProvider {
+  // Both env reads go through `process.env` uniformly: this one and the
+  // `SWEEP_CONFIG` read inside `ensureConfig()` below. (A param would have
+  // controlled only this read while `ensureConfig` always hits `process.env`,
+  // which is the misleading split this signature avoids.)
+  // Blank counts as absent (matching core's env-override handling and the
+  // prior `if (!canned)` behavior): `SWEEP_TEST_RESPONSES=` neutralizes an
+  // inherited var rather than declaring a broken seam. Only a non-blank value
+  // is a present-but-maybe-broken seam.
+  const canned = process.env.SWEEP_TEST_RESPONSES?.trim();
+  if (canned) {
+    try {
+      const parsed = JSON.parse(canned) as {
+        analysis?: TestResponses;
+        manipulation?: TestResponses;
+      };
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        parsed.analysis === undefined ||
+        parsed.manipulation === undefined
+      ) {
+        throw new Error("SWEEP_TEST_RESPONSES must be a JSON { analysis, manipulation } object");
+      }
+      // An empty response array is canned playback with nothing to play —
+      // `createLlm({name:"test"})` rejects it. Catch it here so `analyzeScript`
+      // can build the test handles outside a try without that throw escaping;
+      // an unusable seam is `broken` (both passes failed), not `none`.
+      if (
+        (Array.isArray(parsed.analysis) && parsed.analysis.length === 0) ||
+        (Array.isArray(parsed.manipulation) && parsed.manipulation.length === 0)
+      ) {
+        throw new Error("SWEEP_TEST_RESPONSES analysis/manipulation must have at least one response");
+      }
+      return { kind: "test", analysis: parsed.analysis, manipulation: parsed.manipulation };
+    } catch (err) {
+      // The seam EXISTS but is broken — an attempted-but-failed analysis, NOT
+      // "no provider". `analyzeScript` renders this as both passes failed.
+      return { kind: "broken", reason: bareMessage(err) };
+    }
+  }
+
+  // No test seam: a real provider, config-driven. Any throw here (resolution
+  // or createLlm) means there is no usable provider.
+  try {
+    return { kind: "real", llm: llmFromResolved(resolveProvider(ensureConfig())) };
+  } catch {
+    return { kind: "none" };
+  }
+}
+
 /** Run one structured pass on its own handle/conversation. Throws on failure. */
 async function runPass<S extends z.ZodObject>(
   llm: Llm,
@@ -145,67 +225,79 @@ async function runPass<S extends z.ZodObject>(
  * NEVER throws — every error is mapped to a `failed` pass result. The whole
  * promise always resolves.
  *
- * Provider source this phase: only the `SWEEP_TEST_RESPONSES` test seam. When
- * the provider-config track lands, a real config (from `ensureConfig()`) is
- * read here instead of returning `{kind:"noProvider"}`; do not build that now.
- * The env value is a JSON object `{ analysis: <TestResponses>, manipulation:
- * <TestResponses> }` — each key feeds its own `createLlm({name:"test"})` handle
- * so the two passes are addressed independently. Degradation distinguishes
- * absent from broken: env *missing* => `{kind:"noProvider"}` (no seam at all);
- * env *present but malformed* (non-JSON or not that object shape) => an
- * `{kind:"analyzed"}` result with each pass `failed` rather than throwing — a
- * broken seam is an attempted analysis, not a missing provider.
+ * The `provider` defaults to `resolveAnalysisProvider()` (production callers
+ * pass one arg); the optional second param is an injection seam so a test can
+ * exercise the `real` branch deterministically with a test-backed `Llm` handle
+ * and no network.
+ *
+ * Dispatches on the resolved provider:
+ *  - `none`   → `{kind:"noProvider"}` (no test seam and no usable config).
+ *  - `broken` → `{kind:"analyzed"}` with both passes `failed` — the test seam
+ *               exists but is unusable, an attempted analysis, not a missing
+ *               provider.
+ *  - `test`   → canned playback: each pass feeds its own
+ *               `createLlm({name:"test"})` handle (cursors start at 0, so the
+ *               two passes are addressed independently). Sends take the raw
+ *               caller signal — playback can't hang.
+ *  - `real`   → both passes share one resolved `Llm` handle, each opening its
+ *               own conversation (the in-flight guard is per-conversation, so
+ *               one handle is fine). Each send is bound by `ANALYSIS_TIMEOUT_MS`
+ *               combined with the caller's signal so a hung provider can't
+ *               stall the install; any error (network/auth/parse/timeout/abort)
+ *               maps to a `failed` pass.
  */
-export async function analyzeScript(args: {
-  url: string;
-  scriptBytes: Uint8Array;
-  signal?: AbortSignal;
-}): Promise<AnalysisResult> {
-  const canned = process.env.SWEEP_TEST_RESPONSES;
-  if (!canned) {
-    // Env absent => no provider seam at all; neither pass runs.
-    return { kind: "noProvider" };
-  }
+export async function analyzeScript(
+  args: {
+    url: string;
+    scriptBytes: Uint8Array;
+    signal?: AbortSignal;
+  },
+  provider: AnalysisProvider = resolveAnalysisProvider(),
+): Promise<AnalysisResult> {
+  if (provider.kind === "none") return { kind: "noProvider" };
 
-  let analysisResponses: TestResponses;
-  let manipulationResponses: TestResponses;
-  try {
-    const parsed = JSON.parse(canned) as { analysis?: TestResponses; manipulation?: TestResponses };
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed) ||
-      parsed.analysis === undefined ||
-      parsed.manipulation === undefined
-    ) {
-      throw new Error("SWEEP_TEST_RESPONSES must be a JSON { analysis, manipulation } object");
-    }
-    analysisResponses = parsed.analysis;
-    manipulationResponses = parsed.manipulation;
-  } catch (err) {
-    // Env present but unusable: the seam EXISTS, it's just broken — an
-    // attempted-but-failed analysis, NOT "no provider". Stays `analyzed` with
-    // both passes failed so the dialog renders the analysis-failed state, not
-    // the no-LLM one.
-    const reason = bareMessage(err);
+  if (provider.kind === "broken") {
+    // The seam EXISTS but is broken — an attempted-but-failed analysis, NOT
+    // "no provider". Stays `analyzed` with both passes failed so the dialog
+    // renders the analysis-failed state, not the no-LLM one.
     return {
       kind: "analyzed",
-      analysis: { kind: "failed", reason },
-      manipulation: { kind: "failed", reason },
+      analysis: { kind: "failed", reason: provider.reason },
+      manipulation: { kind: "failed", reason: provider.reason },
     };
   }
 
   const userContent = `Install script fetched from ${args.url}:\n\n${new TextDecoder().decode(args.scriptBytes)}`;
 
+  // The test path uses the raw signal (canned playback can't hang); the real
+  // path bounds each send with a timeout combined with the caller's signal.
+  const passSignal =
+    provider.kind === "real"
+      ? args.signal
+        ? AbortSignal.any([args.signal, AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)])
+        : AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
+      : args.signal;
+
+  // A real provider shares one handle across both passes (separate
+  // conversations); the test provider gets a fresh handle per pass so each
+  // response cursor is addressed independently.
+  const analysisLlm =
+    provider.kind === "real"
+      ? provider.llm
+      : createLlm({ name: "test", responses: provider.analysis });
+  const manipulationLlm =
+    provider.kind === "real"
+      ? provider.llm
+      : createLlm({ name: "test", responses: provider.manipulation });
+
   const analysis = (async (): Promise<AnalysisPass> => {
     try {
-      const llm = createLlm({ name: "test", responses: analysisResponses });
       const value = await runPass(
-        llm,
+        analysisLlm,
         ANALYSIS_SYSTEM_PROMPT,
         userContent,
         twoPassAnalysisSchema,
-        args.signal,
+        passSignal,
       );
       return {
         kind: "ok",
@@ -221,13 +313,12 @@ export async function analyzeScript(args: {
 
   const manipulation = (async (): Promise<ManipulationPass> => {
     try {
-      const llm = createLlm({ name: "test", responses: manipulationResponses });
       const value = await runPass(
-        llm,
+        manipulationLlm,
         MANIPULATION_SYSTEM_PROMPT,
         userContent,
         manipulationSchema,
-        args.signal,
+        passSignal,
       );
       return value.manipulationDetected ? { kind: "fired" } : { kind: "clean" };
     } catch (err) {
