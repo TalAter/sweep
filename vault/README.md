@@ -20,7 +20,7 @@ This note is the single source for what sweep is. The root `README.md` restates 
 Always true. If a concept note contradicts one, the note is wrong.
 
 1. **stdout is for payload only** (e.g. the `sweep list` table). Chrome goes to stderr; dialogs run in alt-screen.
-2. **User-facing errors are plain language, prefixed `sweep:`.** Primitives throw; the orchestrator formats. Never-throws steps own their own lines: a step whose failures must not fail the install (script analysis, `installer/analyze.ts`) formats and prints its own `sweep:` line and swallows the error instead of throwing.
+2. **User-facing errors are plain language, prefixed `sweep:`.** Primitives throw; the orchestrator (`installer/install.ts`) and `main.ts`'s top-level catch format the `sweep:` lines. Analysis (`installer/analyze.ts`) never throws and never fails the install — but its failure surfaces **in the dialog** (the `analysis-failed` state), not as a `sweep:` line: a `sweep:` line would be hidden behind the live alt-screen.
 3. **Exactly one invocation row per `sweep "<cmd>"` run**, whatever the outcome.
 4. **Sweep executes only the locally saved script, only after explicit approval.** Anything fetched for analysis (recursive scripts, binaries) is never run.
 5. **TDD.** Failing test first.

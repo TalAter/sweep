@@ -81,15 +81,19 @@ Sweep does not observe the filesystem during install. Tools that create runtime 
 
 Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user can decide; it does not deliver verdicts on the user's behalf. There is no "all clear" green state — the dialog reads neutral when no concerning signals are present and warning when they are. Absence of red flags is not endorsement.
 
-Two states:
+**Confirm, don't block.** The dialog never *removes* the ability to run. An LLM false-positive that takes away the Run button is too hostile for a judgment that is probabilistic, single-source, and explicitly "visibility, not verdicts." So there is no hard Block state — friction replaces removal. The states and what they offer:
 
-**Allow.** No concerning signals. Soft LLM-prose verdict at the top. Signal panel below — `✓` known-positive, `◯` neutral. Behavior list framed *"things this script appears to do (not exhaustive)"* — sweep does not claim totality. Buttons: `[Cancel] [Run] [Read source]`. Cancel is the default focus.
+- **Clear.** No pill. Soft LLM-prose verdict, then the behavior list framed *"appears to do (not exhaustive)"* — sweep does not claim totality. `[Run]`.
+- **Caution.** A `⚠` pill. Same body. `[Run]`.
+- **Danger.** A `✗` pill. To run, the user types `install` — deliberate friction (mirrors "type the repo name to delete"). The deliberation cost is paid only on danger.
+- **Manipulation.** The analysis pass could not be confirmed clean (the script may be steering the analyzer), so the verdict can't be trusted: a `⚠ analysis may be compromised` banner, and the same type-`install` friction as danger.
+- **No-LLM / analysis-failed.** Source-only header, plain `[Run]`, no friction — analysis-failed is sweep's own failure, not the script's, so it must not penalize the user.
 
-**Block.** Concerning signals present. Risk pill at the top. Concerning signals (`⚠`, `✗`) listed first; neutral signals below. Behavior list as before. **No Run button** — only `[Cancel]` and `[Read source]`. To run anyway, the user invokes the install themselves outside sweep.
-
-When sweep can compare today's script against a known prior version, the dialog adds a changes panel — new URLs, replaced binaries, modified install paths since the last seen version, elevated permission requirements. This comes from whichever source has it: the local store (the user has sweep'd this script before) or the registry (someone else has, and the registry has been tracking the script's history). Local history covers re-encounters; registry history covers first-time installs of scripts with a public track record.
+Cancel is the default focus everywhere except the type-to-confirm input (which must hold focus to be typeable).
 
 The verdict is LLM-generated prose, not a rule-derived label. The LLM is what notices that `ollarna.com` is trying to look like `ollama.com`. Local rules cannot reliably do that, and a deterministic rule engine is explicitly not part of sweep.
+
+The dialog is one frame fed by **insight sources**; the LLM is the first. Other sources slot into the same frame later: a `✓/◯` signal panel for the deterministic lookups, a changes panel diffing today's script against a known prior version (new URLs, replaced binaries, modified install paths, elevated permissions — from the local store or the registry's tracked history), and a source viewer (see Future ideas). The frame is multi-source; only its contents depend on which sources are configured.
 
 ## Without an LLM
 
