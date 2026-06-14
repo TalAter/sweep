@@ -7,8 +7,7 @@
  * The dialog state is NOT the analysis severity. `Severity` is one input; the
  * state also turns on the manipulation pass (a non-clean pass outranks even a
  * `danger` severity) and on failure (→ analysis-failed) and on no provider (→
- * no-llm). So `InsightState` is its own type and the mapping is deliberate, not
- * identity.
+ * no-llm). The mapping is deliberate, not identity.
  *
  * Two contracts are load-bearing enough to call out:
  *
@@ -23,7 +22,7 @@
  *     there is no verdict to caveat — so analysis-failed takes over even when the
  *     manipulation pass fired.
  *
- * `runAffordance` is named policy, not derivable chrome: danger and manipulation
+ * The run affordance is policy, not derivable chrome: danger and manipulation
  * require typing the confirm word; every other state is a plain button. It is
  * surfaced explicitly so a future change to which states need confirmation lives
  * here, not in the component.
@@ -33,17 +32,6 @@ import type { AnalysisResult, Behavior } from "../installer/analyze.ts";
 
 /** The literal word the danger/manipulation type-to-confirm input matches (trimmed, exact). */
 export const CONFIRM_WORD = "install";
-
-export type InsightState =
-  | "clear"
-  | "caution"
-  | "danger"
-  | "manipulation"
-  | "no-llm"
-  | "analysis-failed";
-
-/** Plain `[Run]` button vs the type-`install`-to-run input (danger-level friction). */
-export type RunAffordance = "button" | "type-confirm";
 
 export type InsightView =
   | {

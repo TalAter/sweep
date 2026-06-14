@@ -18,7 +18,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { createElement, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { stripAnsi } from "wrap-core/ansi";
 import { DARK_CORE } from "wrap-core/theme";
 import { ThemeProvider } from "wrap-core/tui";
@@ -75,8 +75,11 @@ function deferred<T>() {
 function makeMountSeam() {
   let app: ReturnType<typeof render> | null = null;
   const rendered: ReactElement[] = [];
-  const wrap = (el: ReactElement) =>
-    createElement(ThemeProvider, { theme: DARK_CORE, nerdFonts: false, children: el });
+  const wrap = (el: ReactElement) => (
+    <ThemeProvider theme={DARK_CORE} nerdFonts={false}>
+      {el}
+    </ThemeProvider>
+  );
 
   const mount = (el: ReactElement) => {
     rendered.push(el);
