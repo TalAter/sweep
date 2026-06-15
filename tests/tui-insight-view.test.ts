@@ -37,7 +37,7 @@ function ok(
     analysis: {
       kind: "ok",
       severity,
-      verdict: "Ollama LLM runtime. Standard vendor installer from the official domain.",
+      summary: "Ollama LLM runtime. Standard vendor installer from the official domain.",
       flags: severity === "clear" ? [] : ["Requests sudo"],
       behaviors: BEHAVIORS,
     },
@@ -55,13 +55,13 @@ describe("deriveInsightView — state matrix", () => {
     expect(view.runAffordance).toBe("button");
   });
 
-  test("ok clear + clean manipulation: clear state, button, verdict + behaviors pass through", () => {
+  test("ok clear + clean manipulation: clear state, button, summary + behaviors pass through", () => {
     const view = deriveInsightView(ok("clear", { kind: "clean" }), URL);
 
     expect(view.state).toBe("clear");
     if (view.state !== "clear") return;
     expect(view.runAffordance).toBe("button");
-    expect(view.verdict).toBe(
+    expect(view.summary).toBe(
       "Ollama LLM runtime. Standard vendor installer from the official domain.",
     );
     expect(view.behaviors).toEqual(BEHAVIORS);
@@ -87,7 +87,7 @@ describe("deriveInsightView — state matrix", () => {
   });
 
   test("ok clear + manipulation FIRED: manipulation outranks the clear severity (allowlist, not severity, decides)", () => {
-    // Severity is clear, yet the manipulation pass is not clean, so the verdict
+    // Severity is clear, yet the manipulation pass is not clean, so the summary
     // is suspect: the manipulation banner + danger-level friction win.
     const view = deriveInsightView(ok("clear", { kind: "fired" }), URL);
 
@@ -95,8 +95,8 @@ describe("deriveInsightView — state matrix", () => {
     if (view.state !== "manipulation") return;
     expect(view.banner).toBe("analysis may be compromised");
     expect(view.runAffordance).toBe("type-confirm");
-    // The (possibly poisoned) verdict is still carried through, show-but-banner.
-    expect(view.verdict).toBe(
+    // The (possibly poisoned) summary is still carried through, show-but-banner.
+    expect(view.summary).toBe(
       "Ollama LLM runtime. Standard vendor installer from the official domain.",
     );
     expect(view.behaviors).toEqual(BEHAVIORS);
@@ -130,7 +130,7 @@ describe("deriveInsightView — state matrix", () => {
 
   test("analysis FAILED + manipulation FIRED: analysis-failed WINS over the manipulation banner (key precedence)", () => {
     // A "may be compromised" banner over a "couldn't analyze" body is incoherent:
-    // there is no verdict to caveat, so analysis-failed must take over even
+    // there is no summary to caveat, so analysis-failed must take over even
     // though the manipulation pass fired.
     const result: AnalysisResult = {
       kind: "analyzed",

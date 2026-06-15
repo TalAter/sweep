@@ -84,7 +84,7 @@ const BUTTON_DIVIDER_AFTER = [0]; // a divider after Cancel only
 
 // Aesthetic floor on the dialog width — the smallest it may get before the
 // terminal clamp. Not an action-bar proxy: the bar is measured below; this just
-// stops a terse loading/verdict box from looking cramped.
+// stops a terse loading/summary box from looking cramped.
 const MIN_CONTENT_WIDTH = 44;
 
 /**
@@ -121,7 +121,7 @@ function insightSizeTo(state: InsightDialogState, nerd: boolean): SizeBasis[] {
   if (view.state === "no-llm" || view.state === "analysis-failed") {
     basis.push(view.message);
   } else {
-    basis.push(view.verdict);
+    basis.push(view.summary);
     if (view.flags.length > 0) {
       basis.push(FLAGS_LABEL, ...view.flags.map((flag) => FLAG_PREFIX + flag));
     }
@@ -273,7 +273,7 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
       ) : view ? (
         <>
           <Box marginTop={1}>
-            <Text color={bodyColor}>{view.verdict}</Text>
+            <Text color={bodyColor}>{view.summary}</Text>
           </Box>
           <FlagList flags={view.flags} color={supportingColor} />
           <BehaviorList behaviors={view.behaviors} color={supportingColor} />

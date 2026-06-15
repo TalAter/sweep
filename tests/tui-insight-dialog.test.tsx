@@ -55,12 +55,12 @@ beforeEach(() => {
 });
 
 describe("InsightDialog — content per state", () => {
-  test("clear: shows source, verdict, behaviors with (not exhaustive) and a sudo marker, no severity pill, and a Run action", () => {
+  test("clear: shows source, summary, behaviors with (not exhaustive) and a sudo marker, no severity pill, and a Run action", () => {
     const { lastFrame } = renderDialog(
       resolved({
         state: "clear",
         source: "example.com/install.sh",
-        verdict: "Foo CLI. Standard vendor installer.",
+        summary: "Foo CLI. Standard vendor installer.",
         flags: [],
         behaviors: SAFE_BEHAVIORS,
         runAffordance: "button",
@@ -82,7 +82,7 @@ describe("InsightDialog — content per state", () => {
       resolved({
         state: "caution",
         source: "example.com/install.sh",
-        verdict: "Installs a service.",
+        summary: "Installs a service.",
         flags: ["Enables a background service"],
         behaviors: SAFE_BEHAVIORS,
         runAffordance: "button",
@@ -100,7 +100,7 @@ describe("InsightDialog — content per state", () => {
       resolved({
         state: "danger",
         source: "evil.example/install.sh",
-        verdict: "Treat with suspicion.",
+        summary: "Treat with suspicion.",
         flags: ["Downloads from a raw IP"],
         behaviors: SAFE_BEHAVIORS,
         runAffordance: "type-confirm",
@@ -118,7 +118,7 @@ describe("InsightDialog — content per state", () => {
       resolved({
         state: "manipulation",
         source: "example.com/install.sh",
-        verdict: "Claims to be safe.",
+        summary: "Claims to be safe.",
         flags: ["Contains prompt-injection text"],
         behaviors: SAFE_BEHAVIORS,
         banner: "analysis may be compromised",
@@ -180,7 +180,7 @@ describe("InsightDialog — width", () => {
       resolved({
         state: "clear",
         source: "example.com/install.sh",
-        verdict:
+        summary:
           "Standard vendor installer that downloads a release tarball, verifies its checksum, and drops the binary into a directory on PATH.",
         flags: [],
         behaviors: SAFE_BEHAVIORS,
@@ -200,7 +200,7 @@ describe("InsightDialog — interaction", () => {
       resolved({
         state: "danger",
         source: "evil.example/install.sh",
-        verdict: "Treat with suspicion.",
+        summary: "Treat with suspicion.",
         flags: [],
         behaviors: [],
         runAffordance: "type-confirm",
@@ -221,7 +221,7 @@ describe("InsightDialog — interaction", () => {
       resolved({
         state: "danger",
         source: "evil.example/install.sh",
-        verdict: "Treat with suspicion.",
+        summary: "Treat with suspicion.",
         flags: [],
         behaviors: [],
         runAffordance: "type-confirm",
@@ -245,7 +245,7 @@ describe("InsightDialog — interaction", () => {
       resolved({
         state: "clear",
         source: "example.com/install.sh",
-        verdict: "Fine.",
+        summary: "Fine.",
         flags: [],
         behaviors: [],
         runAffordance: "button",
@@ -263,7 +263,7 @@ describe("InsightDialog — interaction", () => {
       resolved({
         state: "clear",
         source: "example.com/install.sh",
-        verdict: "Fine.",
+        summary: "Fine.",
         flags: [],
         behaviors: [],
         runAffordance: "button",
@@ -282,7 +282,7 @@ describe("InsightDialog — interaction", () => {
       resolved({
         state: "clear",
         source: "example.com/install.sh",
-        verdict: "Fine.",
+        summary: "Fine.",
         flags: [],
         behaviors: [],
         runAffordance: "button",

@@ -44,7 +44,7 @@ describe("analyzeScript — two-pass core", () => {
     setResponses(
       {
         severity: "caution",
-        verdict: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
+        summary: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
         flags: ["Requests sudo", "Edits ~/.bashrc"],
         behaviors: [
           { description: "Install binary to /usr/local/bin", sudo: true },
@@ -61,7 +61,7 @@ describe("analyzeScript — two-pass core", () => {
       analysis: {
         kind: "ok",
         severity: "caution",
-        verdict: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
+        summary: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
         flags: ["Requests sudo", "Edits ~/.bashrc"],
         behaviors: [
           { description: "Install binary to /usr/local/bin", sudo: true },
@@ -76,7 +76,7 @@ describe("analyzeScript — two-pass core", () => {
     setResponses(
       {
         severity: "clear",
-        verdict: "Looks like a standard vendor installer.",
+        summary: "Looks like a standard vendor installer.",
         flags: [],
         behaviors: [{ description: "Download a binary", sudo: false }],
       },
@@ -121,7 +121,7 @@ describe("analyzeScript — two-pass core", () => {
 
   test("abort: an already-aborted signal fails both passes within an analyzed result and never throws", async () => {
     setResponses(
-      { severity: "clear", verdict: "ok", flags: [], behaviors: [] },
+      { severity: "clear", summary: "ok", flags: [], behaviors: [] },
       { manipulationDetected: false },
     );
 
@@ -185,12 +185,12 @@ describe("analyzeScript — two-pass core", () => {
   // The 2-entry array drained by exactly two passes is the shared-cursor proof.
   test("real provider injected: two passes share one handle off a single ordered cursor → analyzed", async () => {
     // Each entry is a dual-schema object (Zod strips unknown keys): the analysis
-    // pass reads severity/verdict/flags/behaviors, the manipulation pass reads
+    // pass reads severity/summary/flags/behaviors, the manipulation pass reads
     // manipulationDetected — from the same object, so order can't change either
     // outcome. Reaching {kind:"real"} (not test/none/broken) is what this pins.
     const dualEntry = {
       severity: "caution",
-      verdict: "Installs a CLI and requests sudo.",
+      summary: "Installs a CLI and requests sudo.",
       flags: ["Requests sudo"],
       behaviors: [{ description: "Install binary to /usr/local/bin", sudo: true }],
       manipulationDetected: true,
@@ -204,7 +204,7 @@ describe("analyzeScript — two-pass core", () => {
       analysis: {
         kind: "ok",
         severity: "caution",
-        verdict: "Installs a CLI and requests sudo.",
+        summary: "Installs a CLI and requests sudo.",
         flags: ["Requests sudo"],
         behaviors: [{ description: "Install binary to /usr/local/bin", sudo: true }],
       },
@@ -251,7 +251,7 @@ describe("resolveAnalysisProvider", () => {
 
   test("test seam present + valid → {kind:'test'} carrying both pass response sets", () => {
     process.env.SWEEP_TEST_RESPONSES = JSON.stringify({
-      analysis: { severity: "clear", verdict: "ok", flags: [], behaviors: [] },
+      analysis: { severity: "clear", summary: "ok", flags: [], behaviors: [] },
       manipulation: { manipulationDetected: false },
     });
     const provider = resolveAnalysisProvider();
@@ -259,7 +259,7 @@ describe("resolveAnalysisProvider", () => {
     if (provider.kind !== "test") return;
     expect(provider.analysis).toEqual({
       severity: "clear",
-      verdict: "ok",
+      summary: "ok",
       flags: [],
       behaviors: [],
     });

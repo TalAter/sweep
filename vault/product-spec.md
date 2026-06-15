@@ -83,15 +83,17 @@ Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user ca
 
 **Confirm, don't block.** The dialog never *removes* the ability to run. An LLM false-positive that takes away the Run button is too hostile for a judgment that is probabilistic, single-source, and explicitly "visibility, not verdicts." So there is no hard Block state — friction replaces removal. The states and what they offer:
 
-- **Clear.** No pill. Soft LLM-prose verdict, then the behavior list framed *"appears to do (not exhaustive)"* — sweep does not claim totality. `[Run]`.
+- **Clear.** No pill. Soft LLM-prose summary, then the behavior list framed *"appears to do (not exhaustive)"* — sweep does not claim totality. `[Run]`.
 - **Caution.** A `⚠` pill. Same body. `[Run]`.
 - **Danger.** A `✗` pill. To run, the user types `install` — deliberate friction (mirrors "type the repo name to delete"). The deliberation cost is paid only on danger.
-- **Manipulation.** The analysis pass could not be confirmed clean (the script may be steering the analyzer), so the verdict can't be trusted: a `⚠ analysis may be compromised` banner, and the same type-`install` friction as danger.
+- **Manipulation.** The analysis pass could not be confirmed clean (the script may be steering the analyzer), so the summary can't be trusted: a `⚠ analysis may be compromised` banner, and the same type-`install` friction as danger.
 - **No-LLM / analysis-failed.** Source-only header, plain `[Run]`, no friction — analysis-failed is sweep's own failure, not the script's, so it must not penalize the user.
 
 Cancel is the default focus everywhere except the type-to-confirm input (which must hold focus to be typeable).
 
-The verdict is LLM-generated prose, not a rule-derived label. The LLM is what notices that `ollarna.com` is trying to look like `ollama.com`. Local rules cannot reliably do that, and a deterministic rule engine is explicitly not part of sweep.
+The summary is LLM-generated prose, not a rule-derived label. The LLM is what notices that `ollarna.com` is trying to look like `ollama.com`. Local rules cannot reliably do that, and a deterministic rule engine is explicitly not part of sweep.
+
+The dialog optimizes for a fast read, signal over noise: the summary is a few scannable sentences leading with what matters for *this* script (not a restatement of the tool's name, which the user already knows from the URL they pasted); flags are reserved for things genuinely worth a second thought (routine install steps — setting the executable bit, removing the macOS quarantine attribute — are behaviors, not flags); and behaviors are a scannable footprint, not an exhaustive transcript. The field guidance lives in the analysis schema's per-field descriptions (`installer/analyze.ts`), which are the single source emitted into the prompt.
 
 The dialog is one frame fed by **insight sources**; the LLM is the first. Other sources slot into the same frame later: a `✓/◯` signal panel for the deterministic lookups, a changes panel diffing today's script against a known prior version (new URLs, replaced binaries, modified install paths, elevated permissions — from the local store or the registry's tracked history), and a source viewer (see Future ideas). The frame is multi-source; only its contents depend on which sources are configured.
 
@@ -131,7 +133,7 @@ The signals available. Most signals are negative — they flag known-bad. Absenc
 - **Registry signals.** Canonical slug, URL evolution, change history when the installer is in the registry.
 - **LLM behavioral analysis.** What the script does, where it fetches from, whether it runs sudo. Probabilistic. Catches most of what a careful developer would notice on read.
 - **Two-pass injection defense.** A separate LLM pass asks "is this script trying to manipulate a reviewer?" The two passes run in parallel; sweep only trusts the analysis if the manipulation pass came back clean.
-- **LLM verdict prose.** Soft natural-language assessment. Catches things rules cannot — typosquats, suspicious framing, oddly-formed code.
+- **LLM summary prose.** Soft natural-language assessment. Catches things rules cannot — typosquats, suspicious framing, oddly-formed code.
 
 What sweep does **not** catch: novel attacks not in any DB and not LLM-obvious; runtime behavior after install completes; changes done by executables; sophisticated attackers who understand the LLM's blind spots.
 

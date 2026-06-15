@@ -47,7 +47,7 @@ const CLEAR_RESULT: AnalysisResult = {
   analysis: {
     kind: "ok",
     severity: "clear",
-    verdict: "Foo CLI. Standard vendor installer.",
+    summary: "Foo CLI. Standard vendor installer.",
     flags: [],
     behaviors: [{ description: "Download the foo binary", sudo: false }],
   },

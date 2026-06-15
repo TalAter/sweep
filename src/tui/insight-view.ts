@@ -13,13 +13,13 @@
  *
  *   - Trust is an ALLOWLIST of `manipulation.kind === "clean"`. Anything else —
  *     `fired` OR `failed` (a thrown / aborted / timed-out pass) — renders the
- *     verdict under the compromise banner. Never denylist `fired`: a future
+ *     summary under the compromise banner. Never denylist `fired`: a future
  *     non-clean kind would then silently render as trusted (a security regression).
  *     This mirrors the trust contract documented on `ManipulationPass`.
  *
  *   - Precedence: a failed *analysis* pass wins over the manipulation result. A
  *     "may be compromised" banner over a "couldn't analyze" body is incoherent —
- *     there is no verdict to caveat — so analysis-failed takes over even when the
+ *     there is no summary to caveat — so analysis-failed takes over even when the
  *     manipulation pass fired.
  *
  * The run affordance is policy, not derivable chrome: danger and manipulation
@@ -37,7 +37,7 @@ export type InsightView =
   | {
       state: "clear";
       source: string;
-      verdict: string;
+      summary: string;
       flags: string[];
       behaviors: Behavior[];
       runAffordance: "button";
@@ -45,7 +45,7 @@ export type InsightView =
   | {
       state: "caution";
       source: string;
-      verdict: string;
+      summary: string;
       flags: string[];
       behaviors: Behavior[];
       runAffordance: "button";
@@ -53,7 +53,7 @@ export type InsightView =
   | {
       state: "danger";
       source: string;
-      verdict: string;
+      summary: string;
       flags: string[];
       behaviors: Behavior[];
       runAffordance: "type-confirm";
@@ -61,7 +61,7 @@ export type InsightView =
   | {
       state: "manipulation";
       source: string;
-      verdict: string;
+      summary: string;
       flags: string[];
       behaviors: Behavior[];
       banner: string;
@@ -107,7 +107,7 @@ export function deriveInsightView(result: AnalysisResult, sourceUrl: string): In
 
   const { analysis, manipulation } = result;
 
-  // Precedence: a failed analysis pass has no verdict to caveat, so it outranks
+  // Precedence: a failed analysis pass has no summary to caveat, so it outranks
   // the manipulation result entirely.
   if (analysis.kind === "failed") {
     return {
@@ -118,15 +118,15 @@ export function deriveInsightView(result: AnalysisResult, sourceUrl: string): In
     };
   }
 
-  const { verdict, flags, behaviors } = analysis;
+  const { summary, flags, behaviors } = analysis;
 
-  // Trust ALLOWLIST: render the verdict normally only on a provably clean pass.
+  // Trust ALLOWLIST: render the summary normally only on a provably clean pass.
   // `fired` and `failed` both fall through to the compromise banner.
   if (manipulation.kind !== "clean") {
     return {
       state: "manipulation",
       source,
-      verdict,
+      summary,
       flags,
       behaviors,
       banner: COMPROMISE_BANNER,
@@ -136,10 +136,10 @@ export function deriveInsightView(result: AnalysisResult, sourceUrl: string): In
 
   switch (analysis.severity) {
     case "clear":
-      return { state: "clear", source, verdict, flags, behaviors, runAffordance: "button" };
+      return { state: "clear", source, summary, flags, behaviors, runAffordance: "button" };
     case "caution":
-      return { state: "caution", source, verdict, flags, behaviors, runAffordance: "button" };
+      return { state: "caution", source, summary, flags, behaviors, runAffordance: "button" };
     case "danger":
-      return { state: "danger", source, verdict, flags, behaviors, runAffordance: "type-confirm" };
+      return { state: "danger", source, summary, flags, behaviors, runAffordance: "type-confirm" };
   }
 }

@@ -37,7 +37,7 @@ const ANALYSIS_TIMEOUT_MS = 60_000;
 // =========================================================================
 //
 // `analyzeScript` runs two LLM passes CONCURRENTLY against the same provider —
-// an analysis pass (severity + verdict + flags + behaviors) and a manipulation
+// an analysis pass (severity + summary + flags + behaviors) and a manipulation
 // pass (is the script trying to manipulate the reviewer?). Each pass is its own
 // conversation/handle (the llm layer's in-flight guard is per-conversation, so
 // "concurrent" means two handles, not two sends on one). Two handles also give
@@ -55,13 +55,13 @@ export type Severity = "clear" | "caution" | "danger";
 export type Behavior = { description: string; sudo: boolean };
 
 export type AnalysisPass =
-  | { kind: "ok"; severity: Severity; verdict: string; flags: string[]; behaviors: Behavior[] }
+  | { kind: "ok"; severity: Severity; summary: string; flags: string[]; behaviors: Behavior[] }
   | { kind: "failed"; reason: string };
 
 /**
  * Trust contract: only `{kind:"clean"}` is the *provably clean* result that
- * lets the verdict render normally. Every other value — `fired`, and `failed`
- * (which also covers a thrown/aborted/timed-out pass) — means the verdict must
+ * lets the summary render normally. Every other value — `fired`, and `failed`
+ * (which also covers a thrown/aborted/timed-out pass) — means the summary must
  * be shown under the "analysis may be compromised" banner, because we could not
  * confirm the script wasn't steering the analyzer. Consumers MUST allowlist
  * `clean` (render normally only on `clean`); never denylist `fired` — a new
@@ -83,31 +83,42 @@ export type AnalysisResult =
  * validate the reply, so the shape the model is told and the shape we parse
  * cannot drift. Cross-field judgment (the severity rubric, "never assert safe")
  * stays in the prose instructions, never a hand-copied field list.
+ *
+ * FIELD ORDER IS LOAD-BEARING. Structured output is generated autoregressively in
+ * schema order, so evidence comes first (behaviors → flags), the judgment next
+ * (severity), and the synthesis LAST (summary). Writing `summary` after the model
+ * has already emitted the flags and behaviors lets it synthesize over its own
+ * output instead of front-loading everything into the prose and then repeating it.
+ * Parsing is key-based, so order never affects validation or extraction.
  */
 const twoPassAnalysisSchema = z.object({
-  severity: z
-    .enum(["clear", "caution", "danger"])
-    .describe("Overall severity, judged by the rubric in the instructions above."),
-  verdict: z
-    .string()
-    .describe(
-      "Prose: the tool's identity, overall character, and your reasoning. For suspicious scripts, the narrative WHY behind the flags — do not merely re-list the behaviors.",
-    ),
-  flags: z
-    .array(z.string())
-    .describe("Terse strings naming concerning specifics. Empty array when there are none."),
   behaviors: z
     .array(
       z.object({
         description: z
           .string()
           .describe(
-            'A neutral, concrete action the script appears to take. No markers, glyphs, or labels like "(not exhaustive)" — presentation chrome is the renderer\'s job.',
+            "A neutral, concrete thing the script does, phrased tightly. Group closely related steps so the list stays scannable instead of a command-by-command transcript (e.g. detecting OS/arch and downloading the matching build can be one entry). This is where concrete specifics live — full URLs, hostnames, and paths belong here, not in the flags. No glyphs or labels — chrome is the renderer's job.",
           ),
         sudo: z.boolean().describe("true when this action requires root."),
       }),
     )
-    .describe("Concrete actions the script appears to take."),
+    .describe(
+      "A scannable list of what the script does — enough to understand its footprint at a glance, not an exhaustive manifest of every line.",
+    ),
+  flags: z
+    .array(z.string())
+    .describe(
+      'Anything genuinely worth a second thought, ONE terse line each — a few words, not a sentence or paragraph. Name the concern and the briefest context; keep long specifics (full URLs, hostnames, paths) in the behaviors, not here. E.g. "Binary served from a different domain than google.com (common for auto-updaters)." Routine, expected steps (setting the executable bit, removing the macOS quarantine attribute) are not flags — they are behaviors. Empty array when nothing clears the bar. These illustrate the spirit, not a checklist — use your judgement.',
+    ),
+  severity: z
+    .enum(["clear", "caution", "danger"])
+    .describe("Overall severity, judged by the rubric in the instructions above."),
+  summary: z
+    .string()
+    .describe(
+      "Written LAST, after the behaviors, flags, and severity above — so do NOT re-list them. Give a tight 2–3 sentence synthesis: the one-glance takeaway and the single most important thing to weigh before running. Lead with what matters most for THIS script (often where it's served from and whether that origin is trustworthy), never a restatement of the tool's name — the user already knows it from the URL they pasted. A genuinely big red flag may be echoed here. Keep it short — a few sentences, not a paragraph.",
+    ),
 });
 
 const manipulationSchema = z.object({
@@ -141,7 +152,9 @@ const ANALYSIS_SYSTEM_PROMPT = buildSystemPrompt(
 Assign a severity:
 - danger: active deception (typosquatting a known tool's name or domain), handing control to an untrusted source (piping a remote or raw-IP script into a shell), or obfuscation.
 - caution: broad reach without deception (requesting sudo, editing dotfiles, installing system services).
-- clear: none of the above.`,
+- clear: none of the above.
+
+Your goal is to help the user make a fast, confident decision by skimming a short, scannable result — not to produce an exhaustive manifest of everything the script does. Favor signal over noise everywhere: surface what matters, group or drop the routine, and avoid repeating the same point across fields (though a genuinely big red flag can and should appear in both the summary and the flags). Be concise — short lines, no paragraphs where a sentence will do. Produce the fields in the order given: behaviors and flags first, then the summary written LAST as a brief synthesis of what you have already laid out, not a re-listing of it. The examples in the field descriptions illustrate the spirit; they are not checklists — judge what's worth surfacing for the script in front of you.`,
   twoPassAnalysisSchema,
 );
 
@@ -328,7 +341,7 @@ export async function analyzeScript(
       return {
         kind: "ok",
         severity: value.severity,
-        verdict: value.verdict,
+        summary: value.summary,
         flags: value.flags,
         behaviors: value.behaviors,
       };
