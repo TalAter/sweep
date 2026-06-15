@@ -36,6 +36,30 @@ export type ParseError = {
 
 const SHELLS = new Set(["sh", "bash", "zsh"]);
 const FETCHERS = new Set(["curl", "wget"]);
+
+/**
+ * Drop a path prefix from a command word: `/bin/bash` → `bash`, `curl` → `curl`.
+ * Installers occasionally spell out the absolute path (Homebrew uses
+ * `/bin/bash`); sweep cares only about the bare command name.
+ */
+function bareCommand(tok: string): string {
+  return tok.slice(tok.lastIndexOf("/") + 1);
+}
+
+/**
+ * Resolve a runner-shell token to its bare name, stripping any path prefix.
+ * Returns null if the basename isn't a supported shell.
+ */
+function shellFromToken(tok: string | undefined): InstallCommand["shell"] | null {
+  if (!tok) return null;
+  const base = bareCommand(tok);
+  return SHELLS.has(base) ? (base as InstallCommand["shell"]) : null;
+}
+
+/** True if `tok` names a supported fetcher, ignoring any path prefix. */
+function isFetcherToken(tok: string | undefined): boolean {
+  return tok !== undefined && FETCHERS.has(bareCommand(tok));
+}
 // Strict POSIX-style env var name. Lower-case keys are unusual in install
 // commands (and unusual in real-world env vars) — refuse rather than guess.
 const ENV_VAR_LINE = /^([A-Z_][A-Z0-9_]*)=(.*)$/;
@@ -147,8 +171,12 @@ function readValueToken(s: string): { value: string; consumed: number } {
 // Same skeleton — only the inner-substitution regex differs. Both extract
 // the fetcher invocation from inside a substitution and pull the last URL.
 
-const PROC_SUBST_RE = /^(?:(sudo(?:\s+-\S+)*)\s+)?(sh|bash|zsh)\s+<\(([^)]*)\)\s*$/;
-const CMD_SUBST_RE = /^(?:(sudo(?:\s+-\S+)*)\s+)?(sh|bash|zsh)\s+-c\s+["']?\$\(([^)]*)\)["']?\s*$/;
+// `(?:\S*\/)?` swallows an absolute/relative path prefix so `/bin/bash`,
+// `/usr/local/bin/zsh`, etc. resolve to the bare shell name (Homebrew invokes
+// `/bin/bash`). The capture group keeps just the basename.
+const PROC_SUBST_RE = /^(?:(sudo(?:\s+-\S+)*)\s+)?(?:\S*\/)?(sh|bash|zsh)\s+<\(([^)]*)\)\s*$/;
+const CMD_SUBST_RE =
+  /^(?:(sudo(?:\s+-\S+)*)\s+)?(?:\S*\/)?(sh|bash|zsh)\s+-c\s+["']?\$\(([^)]*)\)["']?\s*$/;
 
 function matchesProcessSubstShape(s: string): boolean {
   return /<\(/.test(s);
@@ -197,7 +225,7 @@ function parseSubstShape(
  */
 function extractUrlFromInner(inner: string): string | ParseError {
   const tokens = inner.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0 || !FETCHERS.has(tokens[0] as string)) {
+  if (!isFetcherToken(tokens[0])) {
     return { kind: "unsupported", message: `expected curl or wget inside substitution: ${inner}` };
   }
   const url = lastUrl(inner);
@@ -234,8 +262,7 @@ function parsePipeShape(
     i++;
     while (i < lhsTokens.length && lhsTokens[i]?.startsWith("-")) i++;
   }
-  const fetcher = lhsTokens[i];
-  if (!fetcher || !FETCHERS.has(fetcher)) {
+  if (!isFetcherToken(lhsTokens[i])) {
     return {
       kind: "no-fetcher",
       message: `left side of pipe must start with curl or wget: ${lhs}`,
@@ -252,14 +279,13 @@ function parsePipeShape(
     j++;
     while (j < rhsTokens.length && rhsTokens[j]?.startsWith("-")) j++;
   }
-  const shellTok = rhsTokens[j];
-  if (!shellTok || !SHELLS.has(shellTok)) {
+  const shell = shellFromToken(rhsTokens[j]);
+  if (!shell) {
     return {
       kind: "unsupported",
       message: `right side of pipe must be sh, bash, or zsh: ${rhsRaw}`,
     };
   }
-  const shell = shellTok as InstallCommand["shell"];
   j++;
   // Optional `-s`.
   if (rhsTokens[j] === "-s") j++;
@@ -306,7 +332,7 @@ function classifyNoPipe(s: string): ParseError {
     i++;
     while (i < tokens.length && tokens[i]?.startsWith("-")) i++;
   }
-  if (tokens[i] && FETCHERS.has(tokens[i] as string)) {
+  if (isFetcherToken(tokens[i])) {
     return { kind: "no-pipe", message: "expected `<fetcher> <url> | <shell>` but found no pipe" };
   }
   return { kind: "unsupported", message: `unrecognized install command shape: ${s}` };

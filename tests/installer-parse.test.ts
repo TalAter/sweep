@@ -259,6 +259,44 @@ describe("accepted: bash <(curl <url>)", () => {
   });
 });
 
+describe("accepted: absolute-path shell (/bin/bash, /usr/bin/sh)", () => {
+  test('$() form: /bin/bash -c "$(curl <url>)"', () => {
+    const r = ok('/bin/bash -c "$(curl -fsSL https://example.com/install.sh)"');
+    expect(r.shell).toBe("bash");
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+
+  test("pipe form: curl <url> | /bin/sh", () => {
+    const r = ok("curl -fsSL https://example.com/install.sh | /bin/sh");
+    expect(r.shell).toBe("sh");
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+
+  test("<() form: /usr/local/bin/zsh <(curl <url>)", () => {
+    const r = ok("/usr/local/bin/zsh <(curl https://example.com/install.sh)");
+    expect(r.shell).toBe("zsh");
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+});
+
+describe("accepted: absolute-path fetcher (/usr/bin/curl)", () => {
+  test("pipe form: /usr/bin/curl <url> | sh", () => {
+    const r = ok("/usr/bin/curl -fsSL https://example.com/install.sh | sh");
+    expect(r.shell).toBe("sh");
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+
+  test('$() form: bash -c "$(/usr/bin/curl <url>)"', () => {
+    const r = ok('bash -c "$(/usr/bin/curl -fsSL https://example.com/install.sh)"');
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+
+  test("<() form: sh <(/usr/bin/wget -qO- <url>)", () => {
+    const r = ok("sh <(/usr/bin/wget -qO- https://example.com/install.sh)");
+    expect(r.url).toBe("https://example.com/install.sh");
+  });
+});
+
 // =========================================================================
 // REAL-WORLD CORPUS
 // =========================================================================
@@ -342,6 +380,16 @@ describe("real-world: oh-my-zsh", () => {
     );
     expect(r.shell).toBe("sh");
     expect(r.url).toBe("https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh");
+  });
+});
+
+describe("real-world: homebrew", () => {
+  test('/bin/bash -c "$(curl -fsSL …/Homebrew/install/HEAD/install.sh)"', () => {
+    const r = ok(
+      '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+    );
+    expect(r.shell).toBe("bash");
+    expect(r.url).toBe("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh");
   });
 });
 
@@ -502,6 +550,10 @@ describe("refused: no-pipe", () => {
 
   test("wget https://example.com/x", () => {
     expect(refused("wget https://example.com/x").kind).toBe("no-pipe");
+  });
+
+  test("/usr/bin/curl https://example.com/x (path fetcher, no pipe)", () => {
+    expect(refused("/usr/bin/curl https://example.com/x").kind).toBe("no-pipe");
   });
 });
 
