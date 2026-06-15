@@ -192,6 +192,7 @@ export async function runInstallSession(opts: RunInstallSessionOpts): Promise<In
 
         const analysis: AnalysisResult = await analyzeScript({
           url,
+          finalUrl: result.finalUrl,
           scriptBytes: result.bytes,
           signal,
         });

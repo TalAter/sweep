@@ -114,6 +114,7 @@ const sessionOpts = (
     fetchScript?: (url: string, o?: { signal?: AbortSignal }) => Promise<FetchedScript>;
     analyzeScript?: (a: {
       url: string;
+      finalUrl?: string;
       scriptBytes: Uint8Array;
       signal?: AbortSignal;
     }) => Promise<AnalysisResult>;
@@ -154,6 +155,36 @@ describe("runInstallSession — direct mode", () => {
 
     // Cancel to settle the session and end the test cleanly.
     seam.write("");
+    await decisionP;
+  });
+});
+
+describe("runInstallSession — redirect provenance", () => {
+  test("forwards the fetched finalUrl (post-redirect origin) to analyzeScript", async () => {
+    const seam = makeMountSeam();
+    // A fetch whose final origin differs from the typed URL.
+    const redirected: FetchedScript = { ...FETCHED, finalUrl: "https://cdn.evil.example/x.sh" };
+    let captured: { url: string; finalUrl?: string } | undefined;
+
+    const decisionP = runInstallSession(
+      sessionOpts(
+        seam,
+        { kind: "direct", raw: RAW, parsed: PARSED },
+        {
+          fetchScript: async () => redirected,
+          analyzeScript: async (a) => {
+            captured = a;
+            return CLEAR_RESULT;
+          },
+        },
+      ),
+    );
+
+    await waitFor(() => expect(captured).toBeDefined());
+    expect(captured?.url).toBe(PARSED.url);
+    expect(captured?.finalUrl).toBe("https://cdn.evil.example/x.sh");
+
+    seam.write(""); // Esc — settle the session
     await decisionP;
   });
 });

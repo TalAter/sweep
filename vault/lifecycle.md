@@ -39,4 +39,6 @@ Every `sweep "<cmd>"` writes one — and only one — row to `invocations`. The 
 
 **`invocations.sha256` is a fingerprint, not a foreign key.** It records the fetched bytes' hash, not a guaranteed pointer into the CAS. A backing `cache/scripts/<sha>` blob exists only for `ran` / `errored` rows (the save happens on the run path); a `cancelled` row may carry a `sha256` whose bytes were never saved — cancel does not write the CAS.
 
+**`invocations.final_url`** is the post-redirect origin the bytes were served from (`fetch` follows redirects) — null when nothing was fetched, and the only persisted trace of a redirect when it differs from the typed `url`.
+
 The happy-path `invocations` INSERT and `packages` UPDATE share one transaction, so a partial write is unobservable.

@@ -130,6 +130,8 @@ describe("happy path", () => {
     expect(inv.exit_code).toBe(0);
     expect(inv.package_id).toBe(pkg.id);
     expect(inv.url).toBe(sourceUrl("/install.sh"));
+    // The post-redirect origin the bytes were served from (from the fetch).
+    expect(inv.final_url).toBe("https://localhost/resolved");
     expect(inv.sha256).toBe(hash);
     expect(inv.install_command_json).toBeTruthy();
     expect(inv.raw_input).toBe(installCmd("/install.sh"));
@@ -232,6 +234,8 @@ describe("fetch failure", () => {
     expect(inv.outcome).toBe("fetch_failed");
     expect(inv.package_id).toBeNull();
     expect(inv.url).toBe(sourceUrl("/missing.sh"));
+    // No fetch completed → no served-from origin to record.
+    expect(inv.final_url).toBeNull();
     expect(inv.sha256).toBeNull();
     expect(inv.install_command_json).toBeTruthy();
     expect(inv.exit_code).toBeNull();
@@ -298,6 +302,8 @@ describe("cancel — committed, post-fetch", () => {
     const inv = onlyRow(allInvocations());
     expect(inv.outcome).toBe("cancelled");
     expect(inv.sha256).toBe(hash);
+    // A fetch DID complete before the cancel → its served-from origin is recorded.
+    expect(inv.final_url).toBe("https://localhost/resolved");
     expect(inv.package_id).toBeNull();
     expect(inv.exit_code).toBeNull();
 

@@ -9,6 +9,10 @@ export type Invocation = {
   tsFinished: string | null;
   rawInput: string;
   url: string | null;
+  /** Served-from origin after redirects; null when no fetch completed
+   *  (parse/fetch failure, cancel-before-fetch). Can differ from the typed
+   *  `url` — the log is the only place that gap persists. */
+  finalUrl: string | null;
   sha256: string | null;
   installCommandJson: string | null;
   outcome: Outcome;
@@ -35,6 +39,7 @@ export function insertInvocation(args: Omit<Invocation, "id"> & { id?: string })
     tsFinished: args.tsFinished,
     rawInput: args.rawInput,
     url: args.url,
+    finalUrl: args.finalUrl,
     sha256: args.sha256,
     installCommandJson: args.installCommandJson,
     outcome: args.outcome,
@@ -43,9 +48,9 @@ export function insertInvocation(args: Omit<Invocation, "id"> & { id?: string })
   };
   ensureDb().run(
     `INSERT INTO invocations
-       (id, package_id, ts_started, ts_finished, raw_input, url, sha256,
+       (id, package_id, ts_started, ts_finished, raw_input, url, final_url, sha256,
         install_command_json, outcome, exit_code, error_message)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       inv.id,
       inv.packageId,
@@ -53,6 +58,7 @@ export function insertInvocation(args: Omit<Invocation, "id"> & { id?: string })
       inv.tsFinished,
       inv.rawInput,
       inv.url,
+      inv.finalUrl,
       inv.sha256,
       inv.installCommandJson,
       inv.outcome,

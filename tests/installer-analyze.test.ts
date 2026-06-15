@@ -15,7 +15,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createLlm } from "wrap-core/llm";
+import { createLlm, type Llm } from "wrap-core/llm";
 import { analyzeScript, resolveAnalysisProvider } from "../src/installer/analyze.ts";
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -228,6 +228,97 @@ describe("analyzeScript — two-pass core", () => {
     if (result.kind !== "analyzed") return;
     expect(result.analysis).toEqual({ kind: "failed", reason: "model exploded" });
     expect(result.manipulation).toEqual({ kind: "failed", reason: "model exploded" });
+  });
+});
+
+/**
+ * Redirect provenance: `fetchScript` follows redirects and records the
+ * post-redirect `finalUrl`. The analyzer must be told the URL the bytes were
+ * ACTUALLY served from, not just the URL the user typed — otherwise a
+ * `trusted.com → 302 → evil.com` redirect is invisible to analysis. The final
+ * origin is fed as NEUTRAL context (the severity rubric judges it); only a
+ * differing origin is surfaced, so a non-redirect install carries no framing.
+ *
+ * A recording `Llm` (injected via the `{kind:"real"}` provider) captures the
+ * user content each pass sends, so we can assert what reached the model — the
+ * canned test provider discards its prompt, so it can't pin this.
+ */
+function recordingLlm(): { llm: Llm; contents: string[] } {
+  const contents: string[] = [];
+  const reply = {
+    severity: "clear",
+    summary: "ok",
+    flags: [],
+    behaviors: [],
+    manipulationDetected: false,
+  };
+  const llm = {
+    label: "recorder / test",
+    startConversation() {
+      let captured = "";
+      return {
+        entries: [],
+        add(message: { content: string }) {
+          captured = message.content;
+        },
+        async send() {
+          contents.push(captured);
+          return reply;
+        },
+      };
+    },
+  } as unknown as Llm;
+  return { llm, contents };
+}
+
+describe("analyzeScript — redirect provenance", () => {
+  const TRUSTED = "https://trusted.example/install.sh";
+  const SERVED_FROM = "https://evil.example/payload.sh";
+
+  test("a redirect to a different origin reaches the prompt; a non-redirect carries no redirect framing", async () => {
+    // Redirected: the model is told the true served-from origin AND the typed one.
+    const redirected = recordingLlm();
+    await analyzeScript(
+      { url: TRUSTED, finalUrl: SERVED_FROM, scriptBytes: SCRIPT },
+      { kind: "real", llm: redirected.llm },
+    );
+    expect(redirected.contents.length).toBeGreaterThan(0);
+    for (const c of redirected.contents) {
+      expect(c).toContain(SERVED_FROM);
+      expect(c).toContain(TRUSTED);
+    }
+
+    // No redirect (finalUrl === url): one origin, no redirect framing leaks in.
+    const direct = recordingLlm();
+    await analyzeScript(
+      { url: TRUSTED, finalUrl: TRUSTED, scriptBytes: SCRIPT },
+      { kind: "real", llm: direct.llm },
+    );
+    expect(direct.contents.length).toBeGreaterThan(0);
+    for (const c of direct.contents) {
+      expect(c).toContain(TRUSTED);
+      expect(c.toLowerCase()).not.toContain("redirect");
+    }
+  });
+
+  test("URL-parser normalization is NOT framed as a redirect (host case + fragment, no real redirect)", async () => {
+    // `url` is the verbatim pasted token; `finalUrl` is the parser-serialized
+    // `response.url`. A mixed-case host (or a stripped fragment / default port)
+    // that resolves to the same URL must NOT read as a redirect — the comparison
+    // normalizes both sides before deciding.
+    const rec = recordingLlm();
+    await analyzeScript(
+      {
+        url: "https://Trusted.Example/install.sh#frag",
+        finalUrl: "https://trusted.example/install.sh",
+        scriptBytes: SCRIPT,
+      },
+      { kind: "real", llm: rec.llm },
+    );
+    expect(rec.contents.length).toBeGreaterThan(0);
+    for (const c of rec.contents) {
+      expect(c.toLowerCase()).not.toContain("redirect");
+    }
   });
 });
 

@@ -6,6 +6,7 @@ import { findOrCreatePackage } from "../src/store/packages.ts";
 const URL_A = "https://ollama.com/install.sh";
 const SLUG_A = "ollama";
 const SHA_A = "a".repeat(64);
+const FINAL_URL_A = "https://cdn.ollama.com/install.sh"; // post-redirect origin
 const TS_STARTED = "2026-05-20T12:00:00.000Z";
 const TS_FINISHED = "2026-05-20T12:00:05.000Z";
 const INSTALL_CMD_JSON = JSON.stringify({
@@ -22,6 +23,7 @@ const RAN_ARGS = {
   tsFinished: TS_FINISHED,
   rawInput: `curl -fsSL ${URL_A} | sh`,
   url: URL_A,
+  finalUrl: FINAL_URL_A,
   sha256: SHA_A,
   installCommandJson: INSTALL_CMD_JSON,
   outcome: "ran" as const,
@@ -35,6 +37,7 @@ const PARSE_FAILED_ARGS = {
   tsFinished: TS_STARTED,
   rawInput: "curl … && rm -rf",
   url: null,
+  finalUrl: null,
   sha256: null,
   installCommandJson: null,
   outcome: "parse_failed" as const,
@@ -55,6 +58,7 @@ describe("insertInvocation", () => {
     expect(row.ts_finished).toBe(TS_FINISHED);
     expect(row.raw_input).toBe(RAN_ARGS.rawInput);
     expect(row.url).toBe(URL_A);
+    expect(row.final_url).toBe(FINAL_URL_A);
     expect(row.sha256).toBe(SHA_A);
     expect(row.install_command_json).toBe(INSTALL_CMD_JSON);
     expect(row.outcome).toBe("ran");
@@ -89,6 +93,7 @@ describe("insertInvocation", () => {
     expect(row.outcome).toBe("parse_failed");
     expect(row.package_id).toBeNull();
     expect(row.url).toBeNull();
+    expect(row.final_url).toBeNull();
     expect(row.sha256).toBeNull();
     expect(row.install_command_json).toBeNull();
     expect(row.exit_code).toBeNull();
@@ -138,6 +143,7 @@ function readRawInvocation(id: string) {
     ts_finished: string | null;
     raw_input: string;
     url: string | null;
+    final_url: string | null;
     sha256: string | null;
     install_command_json: string | null;
     outcome: string;

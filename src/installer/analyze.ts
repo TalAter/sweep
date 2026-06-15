@@ -166,6 +166,28 @@ const MANIPULATION_SYSTEM_PROMPT = buildSystemPrompt(
 const bareMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
+ * Did the fetch actually land somewhere other than the user typed? `finalUrl` is
+ * `response.url` (URL-parser–serialized: host lowercased, default port dropped,
+ * fragment stripped) while `url` is the verbatim pasted token, so a raw string
+ * compare flags cosmetic-only differences as redirects. Normalize both through
+ * the URL parser — dropping the fragment, which the server never sees — so only
+ * a genuine host/path/query change counts; fall back to raw inequality if either
+ * side won't parse.
+ */
+function isRedirect(typed: string, finalUrl: string): boolean {
+  const normalize = (u: string): string => {
+    const url = new URL(u);
+    url.hash = "";
+    return url.href;
+  };
+  try {
+    return normalize(typed) !== normalize(finalUrl);
+  } catch {
+    return typed !== finalUrl;
+  }
+}
+
+/**
  * Which provider — if any — backs an analysis run, resolved from env + config.
  * `none` → the dialog's noProvider state; `broken` → an attempted-but-failed
  * analysis (the test seam exists but is unusable); `test` → canned playback,
@@ -288,6 +310,12 @@ async function runPass<S extends z.ZodObject>(
 export async function analyzeScript(
   args: {
     url: string;
+    /** Post-redirect origin the bytes were actually served from (`fetch` follows
+     *  redirects). When it differs from `url`, that mismatch is fed to the model
+     *  as NEUTRAL context — the severity rubric judges it; we don't pre-classify.
+     *  A `trusted.com → 302 → evil.com` redirect is otherwise invisible to
+     *  analysis, which only ever saw the URL the user typed. */
+    finalUrl?: string;
     scriptBytes: Uint8Array;
     signal?: AbortSignal;
   },
@@ -306,7 +334,13 @@ export async function analyzeScript(
     };
   }
 
-  const userContent = `Install script fetched from ${args.url}:\n\n${new TextDecoder().decode(args.scriptBytes)}`;
+  // State the true served-from origin only when a redirect actually moved it —
+  // a non-redirect install reads as a plain single-origin line, no framing.
+  const provenance =
+    args.finalUrl !== undefined && isRedirect(args.url, args.finalUrl)
+      ? `Install script requested from ${args.url}; after an HTTP redirect, served from ${args.finalUrl}`
+      : `Install script fetched from ${args.url}`;
+  const userContent = `${provenance}:\n\n${new TextDecoder().decode(args.scriptBytes)}`;
 
   // The test path uses the raw signal (canned playback can't hang); the real
   // path bounds each send with a timeout combined with the caller's signal.

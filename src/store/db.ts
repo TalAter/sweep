@@ -48,6 +48,7 @@ function migrate(db: Database): void {
       ts_finished           TEXT,
       raw_input             TEXT NOT NULL,
       url                   TEXT,
+      final_url             TEXT,
       sha256                TEXT,
       install_command_json  TEXT,
       outcome               TEXT NOT NULL,
