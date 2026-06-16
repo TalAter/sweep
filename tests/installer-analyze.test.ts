@@ -44,11 +44,11 @@ describe("analyzeScript — two-pass core", () => {
     setResponses(
       {
         severity: "caution",
-        summary: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
-        flags: ["Requests sudo", "Edits ~/.bashrc"],
+        summary: "Installs a CLI, but overwrites another tool's config in the process.",
+        flags: ["Overwrites ~/.config/othertool, deleting existing settings"],
         behaviors: [
           { description: "Install binary to /usr/local/bin", sudo: true },
-          { description: "Append export line to ~/.bashrc", sudo: false },
+          { description: "Overwrite ~/.config/othertool", sudo: false },
         ],
       },
       { manipulationDetected: false },
@@ -61,11 +61,11 @@ describe("analyzeScript — two-pass core", () => {
       analysis: {
         kind: "ok",
         severity: "caution",
-        summary: "Installs a CLI to /usr/local/bin and edits PATH in your shell rc.",
-        flags: ["Requests sudo", "Edits ~/.bashrc"],
+        summary: "Installs a CLI, but overwrites another tool's config in the process.",
+        flags: ["Overwrites ~/.config/othertool, deleting existing settings"],
         behaviors: [
           { description: "Install binary to /usr/local/bin", sudo: true },
-          { description: "Append export line to ~/.bashrc", sudo: false },
+          { description: "Overwrite ~/.config/othertool", sudo: false },
         ],
       },
       manipulation: { kind: "clean" },

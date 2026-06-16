@@ -82,8 +82,8 @@ describe("InsightDialog — content per state", () => {
       resolved({
         state: "caution",
         source: "example.com/install.sh",
-        summary: "Installs a service.",
-        flags: ["Enables a background service"],
+        summary: "Installs a CLI, but overwrites another tool's config.",
+        flags: ["Overwrites another tool's config, deleting existing settings"],
         behaviors: SAFE_BEHAVIORS,
         runAffordance: "button",
       }),
@@ -91,7 +91,7 @@ describe("InsightDialog — content per state", () => {
     const text = stripAnsi(lastFrame() ?? "");
     expect(text).toContain("⚠ caution");
     expect(text).toContain("Flags:");
-    expect(text).toContain("Enables a background service");
+    expect(text).toContain("Overwrites another tool's config, deleting existing settings");
     expect(text).toContain("Run");
   });
 

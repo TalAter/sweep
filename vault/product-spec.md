@@ -83,7 +83,7 @@ Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user ca
 
 **Confirm, don't block.** The dialog never *removes* the ability to run. An LLM false-positive that takes away the Run button is too hostile for a judgment that is probabilistic, single-source, and explicitly "visibility, not verdicts." So there is no hard Block state — friction replaces removal. The states and what they offer:
 
-- **Clear.** No pill. Soft LLM-prose summary, then the behavior list framed *"appears to do (not exhaustive)"* — sweep does not claim totality. `[Run]`.
+- **Clear.** No pill. Soft LLM-prose summary, then the behavior list framed *"appears to do (not exhaustive)"* — sweep does not claim totality. `[Run]`. The common case.
 - **Caution.** A `⚠` pill. Same body. `[Run]`.
 - **Danger.** A `✗` pill. To run, the user types `install` — deliberate friction (mirrors "type the repo name to delete"). The deliberation cost is paid only on danger.
 - **Manipulation.** The analysis pass could not be confirmed clean (the script may be steering the analyzer), so the summary can't be trusted: a `⚠ analysis may be compromised` banner, and the same type-`install` friction as danger.
@@ -92,6 +92,10 @@ Sweep's analysis surfaces in a TUI dialog. Sweep surfaces signals so the user ca
 Cancel is the default focus everywhere except the type-to-confirm input (which must hold focus to be typeable).
 
 The summary is LLM-generated prose, not a rule-derived label. The LLM is what notices that `ollarna.com` is trying to look like `ollama.com`. Local rules cannot reliably do that, and a deterministic rule engine is explicitly not part of sweep.
+
+**The dialog answers one question: is there anything here I should pay attention to, or is it business as usual?** Flags name the specific things worth a look (the LLM flags freely, at its discretion); severity is how much attention the script as a whole demands. **They are independent axes** — a flag existing does NOT raise severity; if severity were just "are there any flags," it wouldn't need an LLM, and counting an array is not the job.
+
+Severity is grounded in **consequence**, not in guessing what the tool "needs" — the LLM may not know the tool, and a legitimate tool can need broad/privileged access (an earlier "does the footprint fit what the tool needs" framing was wrong for exactly this reason). The baseline is a clean install (download, sudo, PATH, the tool's own service, removing quarantine on its own binary) — business as usual, `clear` even when broad. `caution` is reserved for a real side effect worth knowing first: destructive or hard-to-reverse actions (clobbering another tool's config), or reaching beyond installing *this* tool (touching unrelated tools, disabling a system-wide protection — not the routine quarantine removal). `danger` is deception / loss of control / obfuscation / exfiltrating personal data. Do NOT mechanize this into a trigger list ("any sudo/dotfile/service ⇒ caution" — the old rubric, which fired on every legitimate installer and made the pill worthless), and do NOT prescribe fame-based leeway (the model may weigh reputation if relevant; the rubric must not hardcode famous ⇒ ok).
 
 The dialog optimizes for a fast read, signal over noise: the summary is a few scannable sentences leading with what matters for *this* script (not a restatement of the tool's name, which the user already knows from the URL they pasted); flags are reserved for things genuinely worth a second thought (routine install steps — setting the executable bit, removing the macOS quarantine attribute — are behaviors, not flags); and behaviors are a scannable footprint, not an exhaustive transcript. The field guidance lives in the analysis schema's per-field descriptions (`installer/analyze.ts`), which are the single source emitted into the prompt.
 

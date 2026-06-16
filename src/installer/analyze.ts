@@ -98,7 +98,7 @@ const twoPassAnalysisSchema = z.object({
         description: z
           .string()
           .describe(
-            "A neutral, concrete thing the script does, phrased tightly. Group closely related steps so the list stays scannable instead of a command-by-command transcript (e.g. detecting OS/arch and downloading the matching build can be one entry). This is where concrete specifics live — full URLs, hostnames, and paths belong here, not in the flags. No glyphs or labels — chrome is the renderer's job.",
+            "A neutral, concrete thing the script does, phrased tightly. Group closely related steps so the list stays scannable instead of a command-by-command transcript (e.g. detecting OS/arch and downloading the matching build can be one entry). This is where concrete specifics live — full URLs, hostnames, and paths belong here. No glyphs or labels — chrome is the renderer's job.",
           ),
         sudo: z.boolean().describe("true when this action requires root."),
       }),
@@ -109,15 +109,17 @@ const twoPassAnalysisSchema = z.object({
   flags: z
     .array(z.string())
     .describe(
-      'Anything genuinely worth a second thought, ONE terse line each — a few words, not a sentence or paragraph. Name the concern and the briefest context; keep long specifics (full URLs, hostnames, paths) in the behaviors, not here. E.g. "Binary served from a different domain than google.com (common for auto-updaters)." Routine, expected steps (setting the executable bit, removing the macOS quarantine attribute) are not flags — they are behaviors. Empty array when nothing clears the bar. These illustrate the spirit, not a checklist — use your judgement.',
+      "Things genuinely worth a second thought before running — things a careful developer would want to know, ones that aren't obvious for this kind of installer. ONE terse line naming the concern. If you are unsure whether something is routine, surface it. A short identifying path or host is fine if it sharpens the concern, e.g. \"Overwrites `~/.claude/plugins/`, deleting existing settings.\" The install's neutral footprint belongs in behaviors — raise a flag only for the parts that warrant a second look; which parts those are is your call, since the same step can be unremarkable in one installer and worth flagging in another. Empty array when nothing clears the bar.",
     ),
   severity: z
     .enum(["clear", "caution", "danger"])
-    .describe("Overall severity, judged by the rubric in the instructions above."),
+    .describe(
+      "clear | caution | danger — how much attention this script demands from the user before installing, judged by the rubric above. NOT a count of flags: independent of the flags array, a script can carry flags and still be clear.",
+    ),
   summary: z
     .string()
     .describe(
-      "Written LAST, after the behaviors, flags, and severity above — so do NOT re-list them. Give a tight 2–3 sentence synthesis: the one-glance takeaway and the single most important thing to weigh before running. Lead with what matters most for THIS script (often where it's served from and whether that origin is trustworthy), never a restatement of the tool's name — the user already knows it from the URL they pasted. A genuinely big red flag may be echoed here. Keep it short — a few sentences, not a paragraph.",
+      "Written LAST, after the behaviors, flags, and severity above — so do NOT re-list them. Give a tight 2–3 sentence synthesis: the one-glance takeaway and the single most important thing to weigh before running. Lead with what matters most for THIS script (often where it's served from and whether that origin is trustworthy), never a restatement of the tool's name — the user already knows it. A genuinely big red flag may be echoed here.",
     ),
 });
 
@@ -149,10 +151,12 @@ Output only the JSON object — no prose before or after it, no markdown code fe
 const ANALYSIS_SYSTEM_PROMPT = buildSystemPrompt(
   `You analyze shell install scripts before a user runs them. Your job is visibility, not verdicts: characterize what the script is, who appears to ship it, and what it does. You MAY note that something looks like a common or official vendor installer, but you must NEVER assert that anything is safe — absence of red flags is not endorsement.
 
-Assign a severity:
-- danger: active deception (typosquatting a known tool's name or domain), handing control to an untrusted source (piping a remote or raw-IP script into a shell), or obfuscation.
-- caution: broad reach without deception (requesting sudo, editing dotfiles, installing system services).
-- clear: none of the above.
+You are helping the user answer one question before they run this script: is there anything here I should pay attention to, or is it business as usual? Flags name the specific things worth a look; severity is how much attention the script as a whole demands. The two are independent — a flag does not by itself raise severity, and counting flags is not how you set it.
+
+Judge by what the script actually DOES and what that would do to the user's machine. The baseline — "business as usual" — is a clean install of a command-line tool: fetching it, writing it under the usual install/config locations, requesting sudo, adding itself to PATH, setting up its own service, removing the quarantine flag on its own download. Routine even when broad — that is clear.
+- danger: deception or loss of control, regardless of what the tool is. These are examples, not a definitive list — typosquatting a known tool's name or domain, piping a further remote or raw-IP fetch into a shell (handing execution to a second, untrusted source), exfiltrating personal data (sending the user's private data off the machine, beyond fetching the tool or anonymous telemetry), or obfuscation that hides what the script does — and anything in the same spirit qualifies.
+- caution: no deception, but the script does something a careful developer would want to know before running — a destructive or hard-to-reverse action (deleting or overwriting files or config the installer did not create, e.g. clobbering another tool's configuration), a change that reaches beyond installing this tool (modifying unrelated tools, disabling a system-wide security protection — not the routine quarantine removal on its own download). Surface side effects that bite, not the ordinary cost of an install.
+- clear: business as usual — a normal install with nothing above. The common case. Neutral, not an endorsement; absence of red flags is not proof of safety.
 
 Your goal is to help the user make a fast, confident decision by skimming a short, scannable result — not to produce an exhaustive manifest of everything the script does. Favor signal over noise everywhere: surface what matters, group or drop the routine, and avoid repeating the same point across fields (though a genuinely big red flag can and should appear in both the summary and the flags). Be concise — short lines, no paragraphs where a sentence will do. Produce the fields in the order given: behaviors and flags first, then the summary written LAST as a brief synthesis of what you have already laid out, not a re-listing of it. The examples in the field descriptions illustrate the spirit; they are not checklists — judge what's worth surfacing for the script in front of you.`,
   twoPassAnalysisSchema,
