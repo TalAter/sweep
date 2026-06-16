@@ -11,3 +11,9 @@ All remaining implementation tasks and future ideas. Completed features are omit
 ## Config
 
 - [ ] Wire `nerdFonts` from config into the install dialog (hardcoded `false` today).
+
+## Observability / dev
+
+- [ ] **Log + trace LLM analysis responses.** Add logging/tracing of the LLM responses (both passes — analysis and manipulation in `installer/analyze.ts`).
+
+- [ ] **`reasoning` field in the analysis response (dev-configurable).** Add an optional `reasoning` string to `twoPassAnalysisSchema` (`installer/analyze.ts`) in which the model explains why it chose `severity` as it did and maybe other choices. Make it configurable so it's only requested in dev. Field order is load-bearing (see the schema's FIELD ORDER comment): to not double as chain-of-thought that *improves* the judgment, it must come after `severity`. Prerequisite: log + tracing (above).
