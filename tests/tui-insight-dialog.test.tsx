@@ -36,6 +36,16 @@ function resolved(view: InsightView): InsightDialogState {
   return { phase: "resolved", view };
 }
 
+// Leading-whitespace width of a line.
+const leadWidth = (line: string) => line.length - line.trimStart().length;
+
+// Left indent of `line`'s text measured from the dialog's inner content edge —
+// i.e. past the centering margin and the 2-cell "│ " border. Pass the frame's
+// top-corner line (`╭…`) as the reference for the dialog's left edge.
+function contentIndent(line: string, cornerLine: string): number {
+  return leadWidth(line) - (leadWidth(cornerLine) + 2);
+}
+
 // Widest visible span in a rendered frame = the dialog's border width. The outer
 // centering box pads each line with spaces; trimming leading/trailing space leaves
 // the dialog's own width (the border line spans corner-to-corner = totalWidth).
@@ -160,12 +170,31 @@ describe("InsightDialog — content per state", () => {
     expect(text).toContain("Run");
   });
 
-  test("loading: shows the Analyzing spinner line, the source, and no Run action", () => {
+  test("loading: the Analyzing spinner rides the bottom border, source stays in the body, no Run action", () => {
     const { lastFrame } = renderDialog({ phase: "loading", source: "example.com/install.sh" });
     const text = stripAnsi(lastFrame() ?? "");
-    expect(text).toContain("example.com/install.sh");
-    expect(text).toContain("Analyzing");
+    const lines = text.split("\n");
+    // The spinner label sits in the bottom border row (corner-to-corner ╰…╯),
+    // not as a body line — that's the whole point of this layout.
+    const statusLine = lines.find((l) => l.includes("Analyzing"));
+    expect(statusLine).toBeDefined();
+    expect(statusLine).toContain("╰");
+    expect(statusLine).toContain("╯");
+    // The source is a body line, above the border.
+    const sourceLine = lines.find((l) => l.includes("example.com/install.sh"));
+    expect(sourceLine).toBeDefined();
+    expect(sourceLine).not.toContain("╰");
     expect(text).not.toMatch(/\bRun\b/);
+  });
+
+  test("body sits one cell in, the action bar two cells deeper still (matches wrap)", () => {
+    const { lastFrame } = renderDialog({ phase: "loading", source: "example.com/install.sh" });
+    const lines = stripAnsi(lastFrame() ?? "").split("\n");
+    const corner = lines.find((l) => l.includes("╭")) ?? "";
+    const sourceLine = lines.find((l) => l.includes("example.com/install.sh")) ?? "";
+    const escLine = lines.find((l) => /\bEsc\b/.test(l)) ?? "";
+    expect(contentIndent(sourceLine, corner)).toBe(1);
+    expect(contentIndent(escLine, corner)).toBe(3);
   });
 });
 

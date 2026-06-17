@@ -24,11 +24,10 @@
  *     hold focus to be typeable.
  */
 
-import { Box, Text, useAnimation } from "ink";
+import { Box, Text } from "ink";
 import { useState } from "react";
 import type { Color } from "wrap-core/ansi";
 import { resolveColorHex } from "wrap-core/ansi";
-import { SPINNER_FRAMES, SPINNER_INTERVAL } from "wrap-core/chrome";
 import { stringWidth } from "wrap-core/text";
 import {
   ActionBar,
@@ -41,6 +40,7 @@ import {
   TextInput,
   useKeyBindings,
   useNerdFonts,
+  useSpinnerStatus,
   useTheme,
 } from "wrap-core/tui";
 import type { Behavior } from "../installer/analyze.ts";
@@ -82,26 +82,33 @@ const BUTTON_ACTIONS: ActionItem[] = [
 ];
 const BUTTON_DIVIDER_AFTER = [0]; // a divider after Cancel only
 
+// Left indent (cells) inside the content box. Body text sits one cell in; the
+// action area sits two cells deeper still — mirrors wrap's dialog chrome.
+const BODY_PAD = 1;
+const ACTION_PAD = 3;
+
 // Aesthetic floor on the dialog width — the smallest it may get before the
 // terminal clamp. Not an action-bar proxy: the bar is measured below; this just
 // stops a terse loading/summary box from looking cramped.
 const MIN_CONTENT_WIDTH = 44;
 
 /**
- * The lines and pre-measured widths the current state will render — fed to
- * `Dialog` as `sizeTo`. Plain text goes in as strings (Dialog measures them); the
- * pill header, the spinner line, and the action bar go in as numbers (already
- * measured, since they're not plain text). Dialog takes the max, floors at
- * `MIN_CONTENT_WIDTH`, and clamps to the terminal — so the box is compact while
- * analyzing and grows with the analysis prose, capping at screen width.
+ * The pre-measured widths the current state will render — fed to `Dialog` as
+ * `sizeTo`. Every contributor is a number that already folds in the indent it's
+ * drawn at: body lines include `BODY_PAD`, the action bar includes the deeper
+ * `ACTION_PAD`. Dialog takes the max, floors at `MIN_CONTENT_WIDTH`, and clamps to
+ * the terminal — so the box is compact while analyzing and grows with the analysis
+ * prose, capping at screen width, without ever wrapping a line the measurement
+ * thought would fit. The "Analyzing…" spinner lives in the bottom border
+ * (`bottomStatus`), which sizes itself, so it isn't a contributor here —
+ * `MIN_CONTENT_WIDTH` keeps the loading box wide enough for it.
  */
 function insightSizeTo(state: InsightDialogState, nerd: boolean): SizeBasis[] {
+  // Rendered width of a body line: its text plus the body indent it's drawn at.
+  const bodyW = (text: string) => BODY_PAD + stringWidth(text);
+
   if (state.phase === "loading") {
-    return [
-      state.source,
-      2 + stringWidth(ANALYZING_LABEL), // spinner glyph + space + label
-      actionBarWidth(CANCEL_ONLY_ACTIONS),
-    ];
+    return [bodyW(state.source), ACTION_PAD + actionBarWidth(CANCEL_ONLY_ACTIONS)];
   }
 
   const { view } = state;
@@ -110,34 +117,36 @@ function insightSizeTo(state: InsightDialogState, nerd: boolean): SizeBasis[] {
   // Header line.
   if (view.state === "caution" || view.state === "danger") {
     const pill = getSeverityPreset(view.state).pill;
-    basis.push(pillWidth([pill], nerd, false) + stringWidth(PILL_GAP + view.source));
+    basis.push(BODY_PAD + pillWidth([pill], nerd, false) + stringWidth(PILL_GAP + view.source));
   } else if (view.state === "manipulation") {
-    basis.push(BANNER_PREFIX + view.banner, view.source);
+    basis.push(bodyW(BANNER_PREFIX + view.banner), bodyW(view.source));
   } else {
-    basis.push(view.source);
+    basis.push(bodyW(view.source));
   }
 
   // Body.
   if (view.state === "no-llm" || view.state === "analysis-failed") {
-    basis.push(view.message);
+    basis.push(bodyW(view.message));
   } else {
-    basis.push(view.summary);
+    basis.push(bodyW(view.summary));
     if (view.flags.length > 0) {
-      basis.push(FLAGS_LABEL, ...view.flags.map((flag) => FLAG_PREFIX + flag));
+      basis.push(bodyW(FLAGS_LABEL), ...view.flags.map((flag) => bodyW(FLAG_PREFIX + flag)));
     }
     if (view.behaviors.length > 0) {
       basis.push(
-        BEHAVIORS_LABEL,
-        ...view.behaviors.map((b) => BEHAVIOR_PREFIX + b.description + (b.sudo ? SUDO_SUFFIX : "")),
+        bodyW(BEHAVIORS_LABEL),
+        ...view.behaviors.map((b) =>
+          bodyW(BEHAVIOR_PREFIX + b.description + (b.sudo ? SUDO_SUFFIX : "")),
+        ),
       );
     }
   }
 
   // Action area.
   if (view.runAffordance === "type-confirm") {
-    basis.push(actionBarWidth(CANCEL_ONLY_ACTIONS), CONFIRM_PROMPT);
+    basis.push(ACTION_PAD + actionBarWidth(CANCEL_ONLY_ACTIONS), bodyW(CONFIRM_PROMPT));
   } else {
-    basis.push(actionBarWidth(BUTTON_ACTIONS, BUTTON_DIVIDER_AFTER));
+    basis.push(ACTION_PAD + actionBarWidth(BUTTON_ACTIONS, BUTTON_DIVIDER_AFTER));
   }
 
   return basis;
@@ -157,7 +166,7 @@ function frameStops(state: InsightDialogState, neutral: Color[]): Color[] {
 function BehaviorList({ behaviors, color }: { behaviors: Behavior[]; color: string }) {
   if (behaviors.length === 0) return null;
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} paddingLeft={BODY_PAD}>
       <Text color={color}>{BEHAVIORS_LABEL}</Text>
       {behaviors.map((b) => (
         <Text key={b.description} color={color}>
@@ -173,7 +182,7 @@ function BehaviorList({ behaviors, color }: { behaviors: Behavior[]; color: stri
 function FlagList({ flags, color }: { flags: string[]; color: string }) {
   if (flags.length === 0) return null;
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} paddingLeft={BODY_PAD}>
       <Text color={color}>{FLAGS_LABEL}</Text>
       {flags.map((flag) => (
         <Text key={flag} color={color}>
@@ -223,12 +232,9 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
     { isActive: buttonNavActive },
   );
 
-  const spinnerActive = isLoading;
-  const { frame: spinnerIndex } = useAnimation({
-    interval: SPINNER_INTERVAL,
-    isActive: spinnerActive,
-  });
-  const spinnerFrame = SPINNER_FRAMES[spinnerIndex % SPINNER_FRAMES.length] ?? "";
+  // While analyzing, the spinner rides the bottom border (like wrap) instead of
+  // sitting in the body; `undefined` once resolved so the border draws plain.
+  const bottomStatus = useSpinnerStatus(isLoading ? ANALYZING_LABEL : undefined);
 
   const source = state.phase === "loading" ? state.source : state.view.source;
 
@@ -243,36 +249,36 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
   return (
     <Dialog
       gradientStops={frameStops(state, neutralGradient)}
+      bottomStatus={bottomStatus}
       sizeTo={insightSizeTo(state, nerdFonts)}
       minContentWidth={MIN_CONTENT_WIDTH}
     >
       {/* Header line: severity pill / banner / bare source. */}
       {view?.state === "caution" || view?.state === "danger" ? (
-        <Box>
+        <Box paddingLeft={BODY_PAD}>
           <Pill {...getSeverityPreset(view.state).pill} nerdFonts={nerdFonts} />
           <Text color={bodyColor}>{`${PILL_GAP}${source}`}</Text>
         </Box>
       ) : view?.state === "manipulation" ? (
-        <Box flexDirection="column">
+        <Box flexDirection="column" paddingLeft={BODY_PAD}>
           <Text color={bannerColor} bold>{`${BANNER_PREFIX}${view.banner}`}</Text>
           <Text color={bodyColor}>{source}</Text>
         </Box>
       ) : (
-        <Text color={bodyColor}>{source}</Text>
+        <Box paddingLeft={BODY_PAD}>
+          <Text color={bodyColor}>{source}</Text>
+        </Box>
       )}
 
-      {/* Body. */}
-      {isLoading ? (
-        <Box marginTop={1}>
-          <Text color={bodyColor}>{`${spinnerFrame} ${ANALYZING_LABEL}`}</Text>
-        </Box>
-      ) : view && (view.state === "no-llm" || view.state === "analysis-failed") ? (
-        <Box marginTop={1}>
+      {/* Body. While loading the body is just the source header above — the
+          "Analyzing…" spinner rides the bottom border. */}
+      {view && (view.state === "no-llm" || view.state === "analysis-failed") ? (
+        <Box marginTop={1} paddingLeft={BODY_PAD}>
           <Text color={bodyColor}>{view.message}</Text>
         </Box>
       ) : view ? (
         <>
-          <Box marginTop={1}>
+          <Box marginTop={1} paddingLeft={BODY_PAD}>
             <Text color={bodyColor}>{view.summary}</Text>
           </Box>
           <FlagList flags={view.flags} color={supportingColor} />
@@ -280,28 +286,37 @@ export function InsightDialog({ state, neutralGradient, onRun, onCancel }: Insig
         </>
       ) : null}
 
-      {/* Action area. */}
-      <Box marginTop={1}>
+      {/* Action area — the action bar is indented deeper than the body (matching
+          wrap); the type-confirm prompt + input stay at body indent. */}
+      <Box flexDirection="column" marginTop={1}>
         {isLoading ? (
-          <ActionBar items={CANCEL_ONLY_ACTIONS} />
-        ) : typeConfirm ? (
-          <Box flexDirection="column">
+          <Box paddingLeft={ACTION_PAD}>
             <ActionBar items={CANCEL_ONLY_ACTIONS} />
-            <Box marginTop={1}>
+          </Box>
+        ) : typeConfirm ? (
+          <>
+            <Box paddingLeft={ACTION_PAD}>
+              <ActionBar items={CANCEL_ONLY_ACTIONS} />
+            </Box>
+            <Box marginTop={1} paddingLeft={BODY_PAD}>
               <Text color={supportingColor}>{CONFIRM_PROMPT}</Text>
             </Box>
-            <TextInput
-              value={confirmValue}
-              onChange={setConfirmValue}
-              onSubmit={handleConfirmSubmit}
+            <Box paddingLeft={BODY_PAD}>
+              <TextInput
+                value={confirmValue}
+                onChange={setConfirmValue}
+                onSubmit={handleConfirmSubmit}
+              />
+            </Box>
+          </>
+        ) : (
+          <Box paddingLeft={ACTION_PAD}>
+            <ActionBar
+              items={BUTTON_ACTIONS}
+              focusedIndex={focusedIndex}
+              dividerAfter={BUTTON_DIVIDER_AFTER}
             />
           </Box>
-        ) : (
-          <ActionBar
-            items={BUTTON_ACTIONS}
-            focusedIndex={focusedIndex}
-            dividerAfter={BUTTON_DIVIDER_AFTER}
-          />
         )}
       </Box>
     </Dialog>
