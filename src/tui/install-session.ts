@@ -138,7 +138,12 @@ export async function runInstallSession(opts: RunInstallSessionOpts): Promise<In
         }),
       );
 
-    const onPasteSubmit = (command: string) => {
+    const onPasteSubmit = (pasted: string) => {
+      // Trim at ingestion (the point of capture) so a single canonical,
+      // whitespace-trimmed command flows into parse AND into the committed
+      // `raw` the orchestrator stores. parse.ts keeps its own `raw` untrimmed,
+      // so the trim must happen here, upstream of parse — not inside it.
+      const command = pasted.trim();
       const result = parseInstallCommand(command);
       if ("kind" in result) {
         // Parse failure: stay on the paste input, surface the message inline.

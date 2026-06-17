@@ -9,7 +9,11 @@ export async function main(deps: RunInstallDeps = {}) {
   try {
     ensureSweepHome();
     ensureConfig();
-    const positional = process.argv[2] ?? "";
+    // Trim at ingestion so a single canonical, whitespace-trimmed command flows
+    // everywhere downstream (parse, the stored rawInput, the analysis cache key).
+    // parse.ts deliberately keeps its `raw` field untrimmed, so the trim must
+    // happen here, upstream of parse — not inside it.
+    const positional = (process.argv[2] ?? "").trim();
 
     // Interactive mode: no args + TTY → run the install session for a pasted
     // command (parse happens inside the session, on paste).

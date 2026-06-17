@@ -86,6 +86,10 @@ function allPackages(): Array<Record<string, unknown>> {
   return ensureDb().query("SELECT * FROM packages").all() as Array<Record<string, unknown>>;
 }
 
+function allInvocations(): Array<Record<string, unknown>> {
+  return ensureDb().query("SELECT * FROM invocations").all() as Array<Record<string, unknown>>;
+}
+
 // Sanity: the test process is non-TTY, so a positional-less run falls through
 // to parse rather than the interactive session.
 
@@ -138,6 +142,18 @@ describe("main()", () => {
     await main();
     expect(process.exitCode).toBe(2);
     expect(errSpy).toHaveBeenCalled();
+  });
+
+  test("leading/trailing whitespace in the install command is trimmed before it is stored", async () => {
+    const cmd = "curl -fsSL https://localhost/install.sh | sh";
+    process.argv = ["bun", "/path/to/index.ts", `  \n\t${cmd}\t \n `];
+    await main(runWith(bytes("echo ok\nexit 0\n")));
+    expect(process.exitCode).toBe(0);
+
+    const invs = allInvocations();
+    expect(invs).toHaveLength(1);
+    // The persisted raw_input is the canonical trimmed form, not the padded input.
+    expect(invs[0]?.raw_input).toBe(cmd);
   });
 
   test("`sweep '<curl | sh>'` happy path exits 0 and persists a package row", async () => {
