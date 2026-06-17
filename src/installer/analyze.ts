@@ -98,7 +98,7 @@ const twoPassAnalysisSchema = z.object({
         description: z
           .string()
           .describe(
-            "A neutral, concrete thing the script does, phrased tightly. Group closely related steps so the list stays scannable instead of a command-by-command transcript (e.g. detecting OS/arch and downloading the matching build can be one entry). This is where concrete specifics live — full URLs, hostnames, and paths belong here. No glyphs or labels — chrome is the renderer's job.",
+            "A neutral, concrete thing the script does, phrased tightly. Group closely related steps into one entry so the list reads as a scannable footprint, not a command-by-command transcript. In particular, collapse parallel branches that differ only by the host platform — OS, CPU arch, libc, shell, or package manager — into a SINGLE entry that states the shared intent and names the axis it varies on, never one entry per branch (e.g. 'detects OS/arch and downloads the matching prebuilt binary' as one line, not one per platform; 'adds itself to the shell startup file (.zshrc/.bashrc/fish)' as one line, not one per shell). This is where concrete specifics live — full URLs, hostnames, and paths belong here. No glyphs or labels — chrome is the renderer's job.",
           ),
         sudo: z.boolean().describe("true when this action requires root."),
       }),
