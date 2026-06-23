@@ -21,7 +21,7 @@ Candidates are static facts of the script: the *resolved* destination is env-dep
 
 ## Decisions
 
-- Analysis keyed by script sha. Re-install of a known script skips the LLM call; a changed upstream script gets fresh analysis, and the sha change is itself a signal to surface.
+- Analysis cached on **(script sha + raw command)**, not sha alone — sudo/shell/args change the verdict, so the command belongs in the key. `hash(sha + raw)` can only *miss* (re-run, cheap), never *collide* (serve a wrong verdict, unacceptable). Re-install of an identical command skips the LLM call; a changed upstream script (new sha) or any command edit forces fresh analysis, and a sha change is itself a signal to surface. finalUrl stays in the analysis prompt but out of the key — a dangerous redirect changes the bytes → new sha anyway, so origin-keying would only churn the cache (eu1/eu2/jp) for no security gain. Cross-user command normalization is a registry-side concern, deferred. (Built with the registry, not now.)
 - **Existence is the invariant, not content.** Most tools self-update in place — binaries mutate, the recorded path stays. Never flag binary-content drift.
 - `lstat`, not `stat` — a dangling symlink is still an artifact, and signals its target was removed.
 - `unknowns` is the honesty valve: handoff writes (first-run state dirs, rc edits made by the installed binary) are invisible to script reading. Say so; don't guess.
