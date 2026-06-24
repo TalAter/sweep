@@ -199,6 +199,7 @@ export async function runInstallSession(opts: RunInstallSessionOpts): Promise<In
           url,
           finalUrl: result.finalUrl,
           scriptBytes: result.bytes,
+          command: cmd,
           signal,
         });
         // Cancel wins: a cancel that aborted analyze maps to analysis-failed

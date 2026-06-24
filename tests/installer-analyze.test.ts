@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createLlm, type Llm } from "wrap-core/llm";
 import { analyzeScript, resolveAnalysisProvider } from "../src/installer/analyze.ts";
+import type { InstallCommand } from "../src/installer/parse.ts";
 
 const bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 const SCRIPT = bytes("echo hello\ntrue\n");
@@ -318,6 +319,80 @@ describe("analyzeScript — redirect provenance", () => {
     expect(rec.contents.length).toBeGreaterThan(0);
     for (const c of rec.contents) {
       expect(c.toLowerCase()).not.toContain("redirect");
+    }
+  });
+});
+
+/**
+ * Exec-context: the literal command the user is about to run (secrets redacted
+ * in place) is fed into BOTH passes alongside the provenance line, so the
+ * analyzer sees the sudo/shell/args/env wrapping the fetch and the manipulation
+ * pass sees everything the analyzer reads (the redacted command still carries
+ * attacker-influenceable text — the URL and non-secret flags — so it is a
+ * prompt-injection surface the manipulation pass must cover).
+ *
+ * The literal (redacted) shell is fed, NOT a prose paraphrase. When no
+ * `command` is supplied the user content is exactly as before (no command line).
+ */
+describe("analyzeScript — command context", () => {
+  /** A minimal InstallCommand carrying a secret env var. */
+  function commandWithSecret(): InstallCommand {
+    return {
+      raw: "curl https://example.com/install.sh | API_TOKEN=sk-LIVE-123 sudo -E sh",
+      envVars: { API_TOKEN: "sk-LIVE-123" },
+      sudo: true,
+      shell: "sh",
+      scriptArgs: [],
+      url: "https://example.com/install.sh",
+    };
+  }
+
+  test("redacted command reaches BOTH passes; the raw secret never does", async () => {
+    const rec = recordingLlm();
+    await analyzeScript(
+      { url: URL, scriptBytes: SCRIPT, command: commandWithSecret() },
+      { kind: "real", llm: rec.llm },
+    );
+
+    // Two passes both got the user content.
+    expect(rec.contents.length).toBe(2);
+    for (const c of rec.contents) {
+      // The literal command, with the secret blanked in place, is present.
+      expect(c).toContain("Command the user is about to run:");
+      expect(c).toContain("curl https://example.com/install.sh | API_TOKEN=<redacted> sudo -E sh");
+      // The raw secret value never leaves the machine via either pass.
+      expect(c).not.toContain("sk-LIVE-123");
+    }
+  });
+
+  test("no command supplied: no command line is added to the user content", async () => {
+    const rec = recordingLlm();
+    await analyzeScript({ url: URL, scriptBytes: SCRIPT }, { kind: "real", llm: rec.llm });
+
+    expect(rec.contents.length).toBe(2);
+    for (const c of rec.contents) {
+      expect(c).not.toContain("Command the user is about to run");
+    }
+  });
+
+  test("a labeled 'Script contents:' delimiter separates the context from the untrusted body", async () => {
+    // The script body must be unambiguously fenced off from the provenance/command
+    // context by a labeled delimiter — the old framing glued the script-introducing
+    // colon onto the command line (`…sh\`:`), leaving no clear boundary.
+    const rec = recordingLlm();
+    const decoded = new TextDecoder().decode(SCRIPT);
+    await analyzeScript(
+      { url: URL, scriptBytes: SCRIPT, command: commandWithSecret() },
+      { kind: "real", llm: rec.llm },
+    );
+
+    expect(rec.contents.length).toBe(2);
+    for (const c of rec.contents) {
+      // The label introduces the body, and the actual bytes follow it.
+      expect(c).toContain(`Script contents:\n${decoded}`);
+      // The old wart is gone: the command line is no longer immediately followed
+      // by the script-introducing colon (the `…<redacted> sudo -E sh\`:` glue).
+      expect(c).not.toContain("sudo -E sh`:");
     }
   });
 });
