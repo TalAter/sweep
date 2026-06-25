@@ -155,6 +155,20 @@ describe("redactCommand — script arg secrets", () => {
     expect(out).toBe("curl https://example.com/i.sh | sh -s -- --Api-Token <redacted>");
     expect(out).not.toContain("sk5");
   });
+
+  test("--flag value with TWO spaces: value still redacted, secret gone", () => {
+    const raw = "curl https://example.com/i.sh | sh -s -- --token  sk1secret";
+    const out = redactCommand(cmd(raw, { scriptArgs: ["--token", "sk1secret"] }));
+    expect(out).toBe("curl https://example.com/i.sh | sh -s -- --token  <redacted>");
+    expect(out).not.toContain("sk1secret");
+  });
+
+  test("--flag value with a TAB separator (space+tab): value still redacted, secret gone", () => {
+    const raw = "curl https://example.com/i.sh | sh -s -- --token \tsk1secret";
+    const out = redactCommand(cmd(raw, { scriptArgs: ["--token", "sk1secret"] }));
+    expect(out).toBe("curl https://example.com/i.sh | sh -s -- --token \t<redacted>");
+    expect(out).not.toContain("sk1secret");
+  });
 });
 
 describe("redactCommand — combined and passthrough", () => {
@@ -234,5 +248,14 @@ describe("redactCommand — accepted misses (pinned current behavior)", () => {
     expect(out).toBe(raw);
     // The user's own secret to a provider they chose — accepted per spec.
     expect(out).toContain("token=sk123");
+  });
+
+  test("flag value beginning with '-' is NOT redacted (treated as valueless)", () => {
+    // A value that starts with `-` looks like a flag, so the `--flag value` form
+    // treats `--token` as valueless and leaves `-dashvalue` intact. Accepted miss.
+    const raw = "curl https://example.com/i.sh | sh -s -- --token -dashvalue";
+    const out = redactCommand(cmd(raw, { scriptArgs: ["--token", "-dashvalue"] }));
+    expect(out).toBe(raw);
+    expect(out).toContain("-dashvalue");
   });
 });

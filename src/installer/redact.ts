@@ -30,7 +30,9 @@
  * they chose; value-shape/entropy detection is deferred): short flags (`-t`),
  * odd names with none of the keywords (`GITHUB_PAT`), and URL/positional
  * secrets are NOT redacted — none of them present a name/flag anchor the
- * keyword list recognizes.
+ * keyword list recognizes. Also: a `--flag value` whose value begins with `-`
+ * (e.g. `--token -dash`) is left unredacted — it's indistinguishable from the
+ * flag being valueless, so we treat it as such.
  */
 
 import type { InstallCommand } from "./parse.ts";
@@ -55,6 +57,12 @@ type Span = { start: number; end: number };
  * Span of a value token beginning at `start` in `raw`. A leading quote spans to
  * its matching close quote (inclusive); otherwise the token runs to the next
  * whitespace. An unterminated quote spans to end-of-string.
+ *
+ * Mirrors the quoting model of `parse.ts`'s `readValueToken` (bare-until-
+ * whitespace, `"…"`/`'…'` to the matching close, unterminated→end), but is
+ * span-based over `raw` rather than slice-based: it returns offsets and keeps
+ * the quotes, whereas `readValueToken` unwraps the quotes and works on a slice.
+ * The contracts differ enough that a shared helper isn't worth it.
  */
 function valueSpanAt(raw: string, start: number): Span {
   const first = raw[start];
@@ -98,9 +106,10 @@ function envSecretSpans(raw: string, name: string): Span[] {
  * Spans for EVERY occurrence of a secret script-arg flag's value in `raw`.
  * Handles both `--flag=value` (the value after the `=` within the same token)
  * and `--flag value` (the following whitespace-separated value token). A flag
- * with no value of its own — at end-of-string, or immediately followed by
- * another flag (`--token --password …`) — contributes no span. Returns [] if
- * the flag anchor isn't found.
+ * with no value of its own — at end-of-string, or whose next token STARTS WITH
+ * `-` (a flag-looking value like `--token --password …`, treated as valueless —
+ * an accepted miss) — contributes no span. Returns [] if the flag anchor isn't
+ * found.
  */
 function argSecretSpans(raw: string, flag: string): Span[] {
   // Anchor on the flag at a token boundary. The match may be `--flag` or, for
@@ -116,11 +125,17 @@ function argSecretSpans(raw: string, flag: string): Span[] {
     if (sep === "=") {
       // `--flag=value`: value begins right after the `=`.
       spans.push(valueSpanAt(raw, valueStart));
-    } else if (valueStart < raw.length && raw[valueStart] !== "-") {
-      // `--flag value`: the value token begins right after the separator. Skip
-      // it when there's nothing left (end-of-string) or when the next token is
-      // itself a flag (`--token --password`) — then this flag is valueless.
-      spans.push(valueSpanAt(raw, valueStart));
+    } else {
+      // `--flag value`: the anchor consumed exactly one whitespace char into the
+      // separator, but the gap may be wider (`--flag  value`, a tab, …). Skip ALL
+      // remaining whitespace so we span the value, not the gap — landing on the
+      // gap would insert `<redacted>` into the whitespace and leak the real value.
+      let vs = valueStart;
+      while (vs < raw.length && /\s/.test(raw[vs] as string)) vs++;
+      // Span the value unless the next token STARTS WITH `-` (a flag-looking
+      // value is treated as valueless — an accepted miss) or there's nothing
+      // left (end-of-string): then this flag carries no value of its own.
+      if (vs < raw.length && raw[vs] !== "-") spans.push(valueSpanAt(raw, vs));
     }
     if (anchor.lastIndex <= m.index) anchor.lastIndex = m.index + 1;
   }
