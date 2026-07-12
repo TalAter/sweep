@@ -26,4 +26,6 @@ A stop hook runs `bun run lint` (biome --write + tsc) automatically when you fin
 Sweep is a sibling of [Wrap](../wrap/), sharing substrate via the `wrap-core` package. Different domain, similar bones.
 When working on shared substrate (TUI primitives, theme, providers, dialog infra, config), read `vault/wrap-core-api/` — a directory; start at its README.
 
+wrap-core is unpublished; it resolves via local workspace linking and a separate CI-only mechanism that can silently drift out of sync. Before touching dependency wiring, build scripts, or release workflows, read `vault/dependency-model.md`.
+
 When scaffolding something sweep doesn't yet have an opinion on (tests, vault, config, prompt shape, CI, release), mirror how wrap does it unless there's a clear reason to diverge — wrap is the mature sibling and our conventions live there. Sweep's own conventions emerge as domain pressure shows up.
