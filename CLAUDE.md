@@ -29,3 +29,11 @@ When working on shared substrate (TUI primitives, theme, providers, dialog infra
 wrap-core is unpublished; it resolves via local workspace linking and a separate CI-only mechanism that can silently drift out of sync. Before touching dependency wiring, build scripts, or release workflows, read `vault/dependency-model.md`.
 
 When scaffolding something sweep doesn't yet have an opinion on (tests, vault, config, prompt shape, CI, release), mirror how wrap does it unless there's a clear reason to diverge — wrap is the mature sibling and our conventions live there. Sweep's own conventions emerge as domain pressure shows up.
+
+## Secrets
+
+`~/.sweep/config.jsonc` (and `$SWEEP_HOME/config.jsonc`) holds live provider API keys. Never `cat` it raw. Read it with the `apiKey` values stripped:
+
+```sh
+sed -E 's/("apiKey"[[:space:]]*:[[:space:]]*")[^"]*"/\1<redacted>"/' ~/.sweep/config.jsonc
+```
