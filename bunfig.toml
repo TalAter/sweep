@@ -1,2 +1,0 @@
-[test]
-preload = ["./tests/sweep-home-preload.ts", "./tests/spawn-inherit-preload.ts"]

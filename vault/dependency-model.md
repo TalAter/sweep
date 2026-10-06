@@ -1,1 +1,0 @@
-../../wrap-core/vault/dependency-model.md

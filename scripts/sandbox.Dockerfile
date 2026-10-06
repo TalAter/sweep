@@ -1,33 +1,19 @@
-# Disposable Linux box for exercising real installers through the locally-built
-# sweep (and wrap). Built once, reused; the per-working-copy container mounts
-# the host dist/ dirs at /sweep-bin and /wrap-bin.
-#
-# glibc base on purpose: the bun-compiled binaries are dynamically linked
-# against glibc, so musl/alpine would not run them.
-FROM ubuntu:24.04
+# Linux builds and PTY verification are independent of any sibling checkout.
+FROM rust:slim-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends cmake pkg-config python3 zsh && rm -rf /var/lib/apt/lists/*
+WORKDIR /sweep
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --locked --release
 
-# Keep apt's package lists (don't rm /var/lib/apt/lists) so installers run
-# inside the box can `apt-get install` their deps on demand — faithfully
-# mirroring a real dev machine. Some installers (e.g. ollama) need zstd.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-       ca-certificates curl git sudo sqlite3
+FROM build AS verify
+COPY tests ./tests
+RUN cargo test --locked && python3 tests/terminal.py target/release/sweep
 
-# Non-root user with passwordless sudo — mirrors a real dev machine, so
-# installers that shell out to `sudo` work and ones that refuse to run as root
-# behave faithfully.
-RUN useradd --create-home --shell /bin/bash dev \
-  && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
-  && chmod 0440 /etc/sudoers.d/dev
-
-# `sweep`/`wrap`/`w` on PATH point at the linux binaries that will be
-# bind-mounted in. Symlink creation does not require the target to exist at
-# build time; resolving it does, which the mounts provide at run time. `w`
-# (the host alias) deliberately shadows coreutils `w` here.
-RUN ln -s /sweep-bin/sweep-linux-arm64 /usr/local/bin/sweep \
-  && ln -s /wrap-bin/wrap-linux-arm64  /usr/local/bin/wrap \
-  && ln -s /wrap-bin/wrap-linux-arm64  /usr/local/bin/w
-
+FROM ubuntu:24.04 AS sandbox
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git sudo sqlite3 zsh && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --shell /bin/bash dev && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
+COPY --from=build /sweep/target/release/sweep /usr/local/bin/sweep
 USER dev
 WORKDIR /home/dev
 CMD ["bash"]
