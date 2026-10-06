@@ -13,4 +13,4 @@ CREATE TABLE invocations (
 );
 INSERT INTO packages VALUES(7,'old-tool','https://www.example.org/install','abc123','installed','2025-01-01T00:00:00.000Z','2025-01-01T00:00:00.000Z','2025-01-03T00:00:00.000Z');
 INSERT INTO packages VALUES(8,'failed-tool','https://failed.example/install',NULL,'failed','2025-01-02T00:00:00.000Z',NULL,NULL);
-INSERT INTO invocations VALUES('legacy-id',7,'2025-01-01T00:00:00.000Z','2025-01-01T00:00:01.000Z','curl https://www.example.org/install | sh','https://www.example.org/install','https://www.example.org/install','abc123','{}','ran',0,NULL);
+INSERT INTO invocations VALUES('existing-id',7,'2025-01-01T00:00:00.000Z','2025-01-01T00:00:01.000Z','curl https://www.example.org/install | sh','https://www.example.org/install','https://www.example.org/install','abc123','{}','ran',0,NULL);

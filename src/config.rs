@@ -193,7 +193,7 @@ mod tests {
         }
     }
     #[test]
-    fn provider_endpoints_honor_legacy_env_defaults_but_explicit_config_wins() {
+    fn provider_endpoints_honor_env_defaults_but_explicit_config_wins() {
         for (name, var) in [
             ("openai", "OPENAI_BASE_URL"),
             ("anthropic", "ANTHROPIC_BASE_URL"),

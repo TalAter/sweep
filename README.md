@@ -16,8 +16,8 @@ packages are not implemented.
 
 ## Configuration and data
 
-Sweep uses `~/.sweep/`, or `$SWEEP_HOME`. Existing `config.jsonc`, `sweep.db`, and
-`cache/scripts/<sha256>` data remain compatible. Back up this directory as a unit.
+Sweep stores `config.jsonc`, `sweep.db`, and `cache/scripts/<sha256>` under
+`~/.sweep/`, or `$SWEEP_HOME`. Back up this directory as a unit.
 Sweep reads configuration; it does not create a provider configuration for you.
 
 Example `config.jsonc`:
@@ -40,8 +40,8 @@ than merging nested objects. `SWEEP_THEME=light` or `dark` overrides appearance.
 
 ## Development
 
-Install a current stable Rust toolchain. No sibling repositories or JavaScript
-runtime are needed. Read [AGENTS.md](AGENTS.md) and [testing.md](testing.md).
+Install a current stable Rust toolchain. Read [AGENTS.md](AGENTS.md) and
+[testing.md](testing.md).
 
 ```sh
 cargo run -- list
@@ -59,5 +59,5 @@ Develop and verify the UI natively on macOS; use Docker-compatible containers
 (including OrbStack) for Linux checks and disposable installer experiments.
 `scripts/sandbox.sh` supports `up`, `down`, `kill`, `rebuild`, and `test`.
 
-See [architecture](vault/architecture.md) and [glossary](vault/README.md) for the
+See [architecture](docs/architecture.md) and [glossary](GLOSSARY.md) for the
 few contracts that are not obvious from module names.

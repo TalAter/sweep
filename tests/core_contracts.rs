@@ -38,8 +38,8 @@ fn parser_preserves_command_contract_and_refusals() {
     }
 }
 #[test]
-fn corpus_matches_reference_acceptance() {
-    for line in include_str!("fixtures/parser-reference.jsonl").lines() {
+fn parser_accepts_and_refuses_documented_command_shapes() {
+    for line in include_str!("fixtures/parser-cases.jsonl").lines() {
         let row: serde_json::Value = serde_json::from_str(line).unwrap();
         let result = parse_install_command(row["input"].as_str().unwrap());
         match row.get("error") {
@@ -200,17 +200,17 @@ async fn fetch_classifies_http_size_cancel_and_body_timeout() {
     );
 }
 #[test]
-fn store_preserves_legacy_schema_and_atomic_package_lifecycle() {
+fn store_preserves_schema_v1_and_atomic_package_lifecycle() {
     use sweep::store::{Invocation, Store};
     let home = tempfile::tempdir().unwrap();
     let db = rusqlite::Connection::open(home.path().join("sweep.db")).unwrap();
-    db.execute_batch("CREATE TABLE schema_meta(version INTEGER PRIMARY KEY); INSERT INTO schema_meta VALUES (1);CREATE TABLE packages(id INTEGER PRIMARY KEY,slug TEXT NOT NULL,source_url TEXT NOT NULL UNIQUE,current_sha256 TEXT,status TEXT NOT NULL,first_seen_at TEXT NOT NULL,installed_at TEXT,last_ran_at TEXT);INSERT INTO packages VALUES(42,'legacy','https://legacy.example/i','old','installed','2024-01-01','2024-01-02','2024-01-03');").unwrap();
+    db.execute_batch("CREATE TABLE schema_meta(version INTEGER PRIMARY KEY); INSERT INTO schema_meta VALUES (1);CREATE TABLE packages(id INTEGER PRIMARY KEY,slug TEXT NOT NULL,source_url TEXT NOT NULL UNIQUE,current_sha256 TEXT,status TEXT NOT NULL,first_seen_at TEXT NOT NULL,installed_at TEXT,last_ran_at TEXT);INSERT INTO packages VALUES(42,'existing','https://existing.example/i','old','installed','2024-01-01','2024-01-02','2024-01-03');").unwrap();
     let mut store = Store::open(home.path()).unwrap();
-    let legacy = store
-        .find_or_create_package("https://legacy.example/i", "changed")
+    let existing = store
+        .find_or_create_package("https://existing.example/i", "changed")
         .unwrap();
-    assert_eq!(legacy.id, 42);
-    assert_eq!(legacy.slug, "legacy");
+    assert_eq!(existing.id, 42);
+    assert_eq!(existing.slug, "existing");
     assert_eq!(store.list_installed_packages().unwrap().len(), 1);
     let pkg = store
         .find_or_create_package("https://example.com/i", "example")

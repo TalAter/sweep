@@ -79,12 +79,12 @@ fn malformed_config_fails_before_dispatch_and_env_overlay_keeps_unknown_fields()
 }
 
 #[test]
-fn legacy_database_is_read_without_rewriting_installed_or_failed_packages() {
+fn existing_database_is_read_without_rewriting_installed_or_failed_packages() {
     let home = TempDir::new().unwrap();
     let db = rusqlite::Connection::open(home.path().join("sweep.db")).unwrap();
-    db.execute_batch(include_str!("fixtures/legacy.sql"))
+    db.execute_batch(include_str!("fixtures/schema-v1.sql"))
         .unwrap();
-    let output = sweep(&home, &["list", "ignored-legacy-argument"]);
+    let output = sweep(&home, &["list", "ignored-argument"]);
     assert!(output.status.success());
     let out = String::from_utf8_lossy(&output.stdout);
     for text in [
