@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
+use std::cell::Cell;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -54,7 +55,9 @@ pub struct Ui {
     input: String,
     cursor: usize,
     run_focused: bool,
-    scroll: u16,
+    // Rendering updates viewport bounds, including after terminal resizes.
+    scroll: Cell<u16>,
+    max_scroll: Cell<u16>,
     tick: usize,
     killed: String,
 }
@@ -68,7 +71,8 @@ impl Ui {
             input: String::new(),
             cursor: 0,
             run_focused: false,
-            scroll: 0,
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(0),
             tick: 0,
             killed: String::new(),
         }
@@ -78,7 +82,8 @@ impl Ui {
         self.input.clear();
         self.cursor = 0;
         self.run_focused = false;
-        self.scroll = 0;
+        self.scroll.set(0);
+        self.max_scroll.set(0);
     }
     fn typing(&self) -> bool {
         matches!(self.phase, Phase::Paste { .. })
@@ -94,12 +99,19 @@ impl Ui {
             return Action::Cancel;
         }
         match key.code {
-            KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_add(8);
+            KeyCode::PageDown | KeyCode::Down => {
+                let amount = if key.code == KeyCode::PageDown { 8 } else { 1 };
+                self.scroll.set(
+                    self.scroll
+                        .get()
+                        .saturating_add(amount)
+                        .min(self.max_scroll.get()),
+                );
                 return Action::None;
             }
-            KeyCode::PageUp => {
-                self.scroll = self.scroll.saturating_sub(8);
+            KeyCode::PageUp | KeyCode::Up => {
+                let amount = if key.code == KeyCode::PageUp { 8 } else { 1 };
+                self.scroll.set(self.scroll.get().saturating_sub(amount));
                 return Action::None;
             }
             _ => {}
@@ -118,8 +130,6 @@ impl Ui {
                         Action::Cancel
                     };
                 }
-                KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
-                KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
                 _ => {}
             }
             return Action::None;
@@ -389,7 +399,9 @@ impl Ui {
         );
         let actions_height = action_rows.min(inner.height);
         let body_height = inner.height.saturating_sub(actions_height + 1);
-        let scroll = self.scroll.min(body_rows.saturating_sub(body_height));
+        self.max_scroll.set(body_rows.saturating_sub(body_height));
+        let scroll = self.scroll.get().min(self.max_scroll.get());
+        self.scroll.set(scroll);
         frame.render_widget(
             paragraph.scroll((scroll, 0)),
             Rect::new(inner.x, inner.y, inner.width, body_height),
@@ -722,6 +734,59 @@ mod tests {
         assert!(after.contains("Cancel"));
         assert_ne!(before, after);
     }
+
+    fn overflowing(kind: InsightKind) -> Ui {
+        let mut ui = resolved(kind);
+        if let Phase::Resolved(view) = &mut ui.phase {
+            view.behaviors = (0..40).map(|n| (format!("Operation {n}"), false)).collect();
+        }
+        ui
+    }
+
+    #[test]
+    fn paging_back_moves_immediately_after_repeated_bottom_input() {
+        let mut ui = overflowing(InsightKind::Clear);
+        screen(&ui, 50, 15);
+        for _ in 0..40 {
+            ui.key(key(KeyCode::PageDown));
+        }
+        let bottom = screen(&ui, 50, 15);
+        // Multiple events may arrive between frames.
+        ui.key(key(KeyCode::PageDown));
+        ui.key(key(KeyCode::PageDown));
+        ui.key(key(KeyCode::PageUp));
+        assert_ne!(bottom, screen(&ui, 50, 15));
+    }
+
+    #[test]
+    fn growing_viewport_clamps_scroll_before_next_input() {
+        let mut ui = overflowing(InsightKind::Clear);
+        screen(&ui, 50, 15);
+        for _ in 0..40 {
+            ui.key(key(KeyCode::PageDown));
+        }
+        screen(&ui, 50, 15);
+        let expanded = screen(&ui, 50, 30);
+        assert!(expanded.contains("Operation 39"));
+        ui.key(key(KeyCode::Up));
+        assert_ne!(expanded, screen(&ui, 50, 30));
+    }
+
+    #[test]
+    fn high_risk_arrow_scrolling_preserves_confirmation_editing() {
+        for kind in [InsightKind::Danger, InsightKind::Manipulation] {
+            let mut ui = overflowing(kind);
+            ui.paste("instal");
+            let before = screen(&ui, 50, 15);
+            ui.key(key(KeyCode::Down));
+            assert_ne!(before, screen(&ui, 50, 15));
+            ui.key(key(KeyCode::Up));
+            assert_eq!(before, screen(&ui, 50, 15));
+            ui.key(key(KeyCode::Left));
+            ui.paste("l");
+            assert_eq!(ui.key(key(KeyCode::Enter)), Action::Run);
+        }
+    }
 }
 
 use crate::{
@@ -771,18 +836,18 @@ async fn run_session_inner(
     provider: AnalysisProvider,
 ) -> io::Result<InstallDecision> {
     use crossterm::event::{self, Event};
+    #[cfg(unix)]
+    let signals = SessionSignals::open()?;
     let mut terminal = TerminalSession::open()?;
     let mut pipeline = session
         .parsed
         .as_ref()
         .map(|parsed| Pipeline::start(parsed.clone(), provider.clone()));
-    #[cfg(unix)]
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    #[cfg(unix)]
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    #[cfg(unix)]
-    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
     loop {
+        #[cfg(unix)]
+        if signals.received() {
+            return Ok(session.cancel(pipeline.as_mut()));
+        }
         terminal.terminal.draw(|frame| session.ui.render(frame))?;
         // Input is processed before asynchronous results so cancellation wins over
         // errors caused by aborting an in-flight request.
@@ -837,15 +902,66 @@ async fn run_session_inner(
             }
         }
         session.ui.tick = session.ui.tick.wrapping_add(1);
-        #[cfg(unix)]
-        tokio::select! {
-            _=terminate.recv()=>return Ok(session.cancel(pipeline.as_mut())),
-            _=interrupt.recv()=>return Ok(session.cancel(pipeline.as_mut())),
-            _=hangup.recv()=>return Ok(session.cancel(pipeline.as_mut())),
-            _=tokio::time::sleep(std::time::Duration::from_millis(25))=>{},
-        }
-        #[cfg(not(unix))]
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+// Signal dispositions belong to the dialog, not the installer that runs afterward.
+// Tokio retains its handlers after listener drop, so use a scoped OS registration.
+#[cfg(unix)]
+static SESSION_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+#[cfg(unix)]
+static SIGNAL_SESSION_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn session_signal(signal: libc::c_int) {
+    // Lock-free atomic store only: no allocation, locks, or terminal I/O in a handler.
+    SESSION_SIGNAL.store(signal, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+struct SessionSignals {
+    previous: Vec<(libc::c_int, libc::sigaction)>,
+}
+#[cfg(unix)]
+impl SessionSignals {
+    fn open() -> io::Result<Self> {
+        use std::sync::atomic::Ordering;
+        SIGNAL_SESSION_ACTIVE
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_| io::Error::other("a terminal session is already active"))?;
+        let mut guard = Self {
+            previous: Vec::with_capacity(3),
+        };
+        SESSION_SIGNAL.store(0, Ordering::Relaxed);
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            // SAFETY: zeroed sigaction values are initialized with a valid handler,
+            // empty mask and flags before installation; the OS fills `previous`.
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+            action.sa_sigaction = session_signal as *const () as libc::sighandler_t;
+            action.sa_flags = libc::SA_RESTART;
+            unsafe { libc::sigemptyset(&mut action.sa_mask) };
+            if unsafe { libc::sigaction(signal, &action, &mut previous) } == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            guard.previous.push((signal, previous));
+        }
+        Ok(guard)
+    }
+    fn received(&self) -> bool {
+        SESSION_SIGNAL.load(std::sync::atomic::Ordering::Relaxed) != 0
+    }
+}
+#[cfg(unix)]
+impl Drop for SessionSignals {
+    fn drop(&mut self) {
+        for (signal, previous) in self.previous.iter().rev() {
+            // SAFETY: restore the exact disposition returned by successful registration.
+            unsafe { libc::sigaction(*signal, previous, std::ptr::null_mut()) };
+        }
+        SIGNAL_SESSION_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1214,7 +1330,7 @@ fn appearance_with(
 mod appearance_tests {
     use super::*;
     #[test]
-    fn environment_and_fresh_legacy_cache_avoid_terminal_probe() {
+    fn environment_and_fresh_cache_avoid_terminal_probe() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join("cache")).unwrap();
         std::fs::write(
@@ -1424,7 +1540,7 @@ mod color_tests {
     use super::*;
     use std::collections::HashMap;
     #[test]
-    fn explicit_no_color_wins_and_legacy_terminal_capabilities_are_honored() {
+    fn explicit_no_color_wins_and_terminal_capabilities_are_honored() {
         let mut env = HashMap::from([
             ("NO_COLOR".into(), "".into()),
             ("FORCE_COLOR".into(), "3".into()),
@@ -1480,7 +1596,7 @@ mod color_tests {
 mod gradient_tests {
     use super::*;
     #[test]
-    fn gradient_retains_original_perceptual_midpoint() {
+    fn gradient_preserves_perceptual_midpoint() {
         assert_eq!(
             gradient(Color::Rgb(80, 160, 255), Color::Rgb(40, 60, 100), 1, 2),
             Color::Rgb(60, 108, 174)

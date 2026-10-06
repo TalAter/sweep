@@ -294,7 +294,9 @@ async fn call_provider(
         "anthropic" => {
             body["system"] = Value::String(system.into());
             body["messages"] = Value::Array(messages.to_vec());
-            body["max_tokens"] = Value::from(8192);
+            body["max_tokens"] = Value::from(anthropic_output_limit(
+                config.model.as_deref().unwrap_or_default(),
+            ));
             body["tools"] = serde_json::json!([{"name":"sweep_analysis","description":"Return the requested structured analysis.","input_schema":schema}]);
             body["tool_choice"] = serde_json::json!({"type":"tool","name":"sweep_analysis"});
             "messages"
@@ -412,6 +414,32 @@ async fn call_provider(
             .as_str()
             .map(str::to_string)
             .ok_or("Model returned no structured output.".into()),
+    }
+}
+fn anthropic_output_limit(model: &str) -> u64 {
+    // Model families have different output ceilings. Unknown/proxy models use
+    // a conservative budget to avoid rejecting otherwise valid requests.
+    if [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-fable-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
+    ]
+    .iter()
+    .any(|family| model.contains(family))
+    {
+        128000
+    } else if ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"]
+        .iter()
+        .any(|family| model.contains(family))
+        || model.contains("claude-sonnet-4-")
+    {
+        64000
+    } else if model.contains("claude-opus-4-") {
+        32000
+    } else {
+        4096
     }
 }
 fn retry_delay(
@@ -1010,6 +1038,61 @@ printf '%s' '{{"manipulationDetected":false}}'
         assert!(!error.contains("SECRET"), "credential fragment leaked");
         assert!(error.contains("401"));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn anthropic_requests_preserve_model_output_limits() {
+        use tokio::io::AsyncWriteExt;
+        for (model, limit) in [
+            ("claude-3-haiku-20240307", 4096),
+            ("proxy-model", 4096),
+            ("claude-sonnet-4-20250514", 64000),
+            ("claude-opus-4-20250514", 32000),
+            ("claude-opus-4-1-20250805", 32000),
+            ("claude-haiku-4-5", 64000),
+            ("claude-sonnet-4-5", 64000),
+            ("claude-opus-4-5", 64000),
+            ("claude-sonnet-4-6", 128000),
+            ("claude-opus-4-6", 128000),
+            ("claude-opus-4-7", 128000),
+            ("claude-opus-4-8", 128000),
+            ("claude-fable-5", 128000),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut stream).await;
+                let requested = request["max_tokens"].as_u64().unwrap();
+                let (status, body) = if requested > limit {
+                    (400, "max_tokens exceeds model output limit".to_string())
+                } else {
+                    (
+                        200,
+                        json!({"content":[{"type":"tool_use","name":"sweep_analysis","input":{}}]})
+                            .to_string(),
+                    )
+                };
+                stream.write_all(format!("HTTP/1.1 {status} fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                requested
+            });
+            let config = ResolvedProvider {
+                name: "anthropic".into(),
+                model: Some(model.into()),
+                api_key: Some("fixture-key".into()),
+                base_url: Some(base),
+            };
+            let result = call_provider(&config, "system", &[], &json!({})).await;
+            let requested = server.await.unwrap();
+            assert_eq!(
+                result.unwrap_or_else(|error| panic!("{model}: {error}")),
+                "{}"
+            );
+            assert_eq!(
+                requested, limit,
+                "use the supported output budget for {model}"
+            );
+        }
     }
 
     #[tokio::test]

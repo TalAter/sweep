@@ -28,7 +28,7 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 URL=f'http://127.0.0.1:{server.server_port}'
 
 class Session:
-    def __init__(self,args=(),canned=None,config=None,extra_env=None,piped_stdin=False,redirect_stdout=False):
+    def __init__(self,args=(),canned=None,config=None,extra_env=None,piped_stdin=False,redirect_stdout=False,ignored_signal=None):
         self.home=tempfile.TemporaryDirectory(prefix='sweep-pty-')
         self.master,self.slave=pty.openpty()
         self.initial=termios.tcgetattr(self.slave)
@@ -39,7 +39,7 @@ class Session:
         if config is not None: env['SWEEP_CONFIG']=json.dumps(config)
         env.update(extra_env or {})
         self.termios_result=pathlib.Path(self.home.name)/'terminal-state.txt'
-        wrapper='import subprocess,termios,fcntl,sys; fcntl.ioctl(0,termios.TIOCSCTTY,0); p=subprocess.Popen(sys.argv[2:],stdin='+('subprocess.DEVNULL' if piped_stdin else 'None')+',stdout='+('subprocess.DEVNULL' if redirect_stdout else 'None')+'); open(sys.argv[1]+".pid","w").write(str(p.pid)); p.wait(); open(sys.argv[1],"w").write(repr(termios.tcgetattr(0))); sys.exit(p.returncode)'
+        wrapper='import subprocess,termios,fcntl,sys,signal; fcntl.ioctl(0,termios.TIOCSCTTY,0); '+(f'signal.signal({ignored_signal},signal.SIG_IGN); ' if ignored_signal is not None else '')+'p=subprocess.Popen(sys.argv[2:],stdin='+('subprocess.DEVNULL' if piped_stdin else 'None')+',stdout='+('subprocess.DEVNULL' if redirect_stdout else 'None')+'); open(sys.argv[1]+".pid","w").write(str(p.pid)); p.wait(); open(sys.argv[1],"w").write(repr(termios.tcgetattr(0))); sys.exit(p.returncode)'
         self.process=subprocess.Popen([sys.executable,'-c',wrapper,str(self.termios_result),BINARY,*args],stdin=self.slave,stdout=self.slave,stderr=self.slave,env=env,start_new_session=True)
         self.output=b''
     def resize(self,w,h):
@@ -76,11 +76,11 @@ class Session:
         os.close(self.master);os.close(self.slave)
         return rows
     def close(self):
-        if self.process.poll() is None:
-            print('terminal cleanup after failure',flush=True)
-            os.killpg(self.process.pid,signal.SIGKILL)
-            try:self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:pass
+        # The wrapper can exit before an installer child; always clean its group.
+        try:os.killpg(self.process.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        try:self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:pass
         self.home.cleanup()
 
 def run(name,fn):
@@ -172,5 +172,23 @@ def external_signal(sig):
         assert s.finish(130)[0][0]=='cancelled'
     finally:s.close()
 
-for name,fn in [('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('fetch failure restoration',fetch_failure)]:run(name,fn)
+def ignored_signal_after_handoff():
+    s=Session([f'curl {URL}/tty | sh'],ignored_signal=signal.SIGTERM)
+    try:
+        s.until('No LLM provider');s.send('\x1b[C\r');s.until('TTY_PROMPT')
+        pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());os.kill(pid,signal.SIGTERM)
+        time.sleep(.1);assert s.process.poll() is None
+        s.send('done\r');assert s.finish(0)[0][0]=='ran'
+    finally:s.close()
+
+def signal_after_handoff(sig):
+    s=Session([f'curl {URL}/tty | sh'])
+    try:
+        s.until('No LLM provider');s.send('\x1b[C\r');s.until('TTY_PROMPT')
+        pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());os.kill(pid,sig)
+        # Python wrapper forwards the negative signal return code through sys.exit.
+        assert s.finish(256-sig)==[]
+    finally:s.close()
+
+for name,fn in [('handoff preserves ignored SIGTERM',ignored_signal_after_handoff),('handoff SIGINT',lambda:signal_after_handoff(signal.SIGINT)),('handoff SIGTERM',lambda:signal_after_handoff(signal.SIGTERM)),('handoff SIGHUP',lambda:signal_after_handoff(signal.SIGHUP)),('external SIGTERM',lambda:external_signal(signal.SIGTERM)),('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('fetch failure restoration',fetch_failure)]:run(name,fn)
 server.shutdown()
