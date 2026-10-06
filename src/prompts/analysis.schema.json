@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "behaviors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A neutral, concrete thing the script does, phrased tightly. Group closely related steps into one entry so the list reads as a scannable footprint, not a command-by-command transcript. In particular, collapse parallel branches that differ only by the host platform \u2014 OS, CPU arch, libc, shell, or package manager \u2014 into a SINGLE entry that states the shared intent and names the axis it varies on, never one entry per branch (e.g. 'detects OS/arch and downloads the matching prebuilt binary' as one line, not one per platform; 'adds itself to the shell startup file (.zshrc/.bashrc/fish)' as one line, not one per shell). This is where concrete specifics live \u2014 full URLs, hostnames, and paths belong here. No glyphs or labels \u2014 chrome is the renderer's job."
+          },
+          "sudo": {
+            "type": "boolean",
+            "description": "true when this action requires root."
+          }
+        },
+        "required": [
+          "description",
+          "sudo"
+        ],
+        "additionalProperties": false
+      },
+      "description": "A scannable list of what the script does \u2014 enough to understand its footprint at a glance, not an exhaustive manifest of every line."
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Things genuinely worth a second thought before running \u2014 things a careful developer would want to know, ones that aren't obvious for this kind of installer. ONE terse line naming the concern. If you are unsure whether something is routine, surface it. A short identifying path or host is fine if it sharpens the concern, e.g. \"Overwrites `~/.claude/plugins/`, deleting existing settings.\" The install's neutral footprint belongs in behaviors \u2014 raise a flag only for the parts that warrant a second look; which parts those are is your call, since the same step can be unremarkable in one installer and worth flagging in another. Empty array when nothing clears the bar."
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "caution",
+        "danger"
+      ],
+      "description": "clear | caution | danger \u2014 how much attention this script demands from the user before installing, judged by the rubric above. NOT a count of flags: independent of the flags array, a script can carry flags and still be clear."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Written LAST, after the behaviors, flags, and severity above \u2014 so do NOT re-list them. Give a tight 2\u20133 sentence synthesis: the one-glance takeaway and the single most important thing to weigh before running. Lead with what matters most for THIS script (often where it's served from and whether that origin is trustworthy), never a restatement of the tool's name \u2014 the user already knows it. A genuinely big red flag may be echoed here."
+    }
+  },
+  "required": [
+    "behaviors",
+    "flags",
+    "severity",
+    "summary"
+  ],
+  "additionalProperties": false
+}
