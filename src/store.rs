@@ -35,8 +35,15 @@ pub fn now() -> String {
 }
 impl Store {
     pub fn open(home: &Path) -> Result<Self> {
+        let created = !home.exists();
         std::fs::create_dir_all(home)?;
-        let db = rusqlite::Connection::open(home.join("sweep.db"))?;
+        if created {
+            private(home, 0o700)?;
+        }
+        let db_path = home.join("sweep.db");
+        let db = rusqlite::Connection::open(&db_path)?;
+        // Raw commands and their secrets live here; keep them out of other users' reach.
+        private(&db_path, 0o600)?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS schema_meta(version INTEGER PRIMARY KEY);
@@ -112,6 +119,18 @@ impl Store {
         }
     }
 }
+#[cfg(unix)]
+fn private(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    Ok(std::fs::set_permissions(
+        path,
+        std::fs::Permissions::from_mode(mode),
+    )?)
+}
+#[cfg(not(unix))]
+fn private(_path: &Path, _mode: u32) -> Result<()> {
+    Ok(())
+}
 fn package_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackageRow> {
     Ok(PackageRow {
         id: row.get("id")?,
@@ -127,4 +146,19 @@ fn package_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PackageRow> {
 fn insert(db: &rusqlite::Connection, inv: &Invocation) -> Result<()> {
     db.execute("INSERT INTO invocations(id,package_id,ts_started,ts_finished,raw_input,url,final_url,sha256,install_command_json,outcome,exit_code,error_message)VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",rusqlite::params![inv.id,inv.package_id,inv.ts_started,inv.ts_finished,inv.raw_input,inv.url,inv.final_url,inv.sha256,inv.install_command_json,inv.outcome,inv.exit_code,inv.error_message])?;
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    #[cfg(unix)]
+    #[test]
+    fn home_and_database_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let base = tempfile::TempDir::new().unwrap();
+        let home = base.path().join("home");
+        Store::open(&home).unwrap();
+        assert_eq!(mode(&home), 0o700);
+        assert_eq!(mode(&home.join("sweep.db")), 0o600);
+    }
 }
