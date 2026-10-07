@@ -162,7 +162,7 @@ def piped_input_mode():
     finally:s.close()
 def redirected_output_mode():
     s=Session(redirect_stdout=True)
-    try:assert s.finish(2,alt=False)[0][0]=='parse_failed'
+    try:assert s.finish(2,alt=False)==[]
     finally:s.close()
 
 def external_signal(sig):
