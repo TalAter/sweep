@@ -162,31 +162,11 @@ fn ansi_foreground(rgb: (u8, u8, u8), level: u8) -> String {
     match crate::tui::quantize(Color::from(rgb), level) {
         Color::Rgb(r, g, b) => format!("38;2;{r};{g};{b}"),
         Color::Indexed(n) => format!("38;5;{n}"),
-        color => {
-            let basic = [
-                Color::Black,
-                Color::Red,
-                Color::Green,
-                Color::Yellow,
-                Color::Blue,
-                Color::Magenta,
-                Color::Cyan,
-                Color::Gray,
-                Color::DarkGray,
-                Color::LightRed,
-                Color::LightGreen,
-                Color::LightYellow,
-                Color::LightBlue,
-                Color::LightMagenta,
-                Color::LightCyan,
-                Color::White,
-            ];
-            basic
-                .iter()
-                .position(|c| *c == color)
-                .map(|n| if n < 8 { 30 + n } else { 90 + n - 8 })
-                .unwrap_or(39)
-                .to_string()
-        }
+        color => crate::tui::BASIC_COLORS
+            .iter()
+            .position(|c| *c == color)
+            .map(|n| if n < 8 { 30 + n } else { 90 + n - 8 })
+            .unwrap_or(39)
+            .to_string(),
     }
 }

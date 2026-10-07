@@ -826,7 +826,7 @@ pub async fn run_session(
 ) -> Result<InstallDecision, Box<SessionError>> {
     use std::io::IsTerminal;
     let mut session = Session::new(start, appearance, nerd_fonts);
-    session.ui.color_level = color_level(io::stdout().is_terminal());
+    session.ui.color_level = color_level(io::stderr().is_terminal());
     run_session_inner(&mut session, provider)
         .await
         .map_err(|error| Box::new(session.failure(error)))
@@ -847,6 +847,11 @@ async fn run_session_inner(
         #[cfg(unix)]
         if signals.received() {
             return Ok(session.cancel(pipeline.as_mut()));
+        }
+        if !TerminalSession::active() {
+            return Err(io::Error::other(
+                "terminal released after a background panic",
+            ));
         }
         terminal.terminal.draw(|frame| session.ui.render(frame))?;
         // Input is processed before asynchronous results so cancellation wins over
@@ -968,6 +973,8 @@ impl Drop for SessionSignals {
 struct TerminalSession {
     terminal: ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 }
+static TERMINAL_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
 impl TerminalSession {
     fn open() -> io::Result<Self> {
         use crossterm::{
@@ -975,28 +982,54 @@ impl TerminalSession {
             execute,
             terminal::{EnterAlternateScreen, enable_raw_mode},
         };
-        enable_raw_mode()?;
+        use std::io::IsTerminal;
+        if !io::stderr().is_terminal() {
+            return Err(io::Error::other("stderr is not a terminal"));
+        }
+        // A panic message must land on a restored screen, not inside the alternate one.
+        PANIC_HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if TERMINAL_ACTIVE.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                    restore_terminal();
+                }
+                previous(info);
+            }));
+        });
+        TERMINAL_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+        if let Err(error) = enable_raw_mode() {
+            TERMINAL_ACTIVE.store(false, std::sync::atomic::Ordering::Release);
+            return Err(error);
+        }
         if let Err(error) = execute!(
             io::stderr(),
             EnterAlternateScreen,
             EnableBracketedPaste,
             crossterm::cursor::Hide
         ) {
-            restore_terminal();
+            Self::release();
             return Err(error);
         }
         match ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stderr())) {
             Ok(terminal) => Ok(Self { terminal }),
             Err(error) => {
-                restore_terminal();
+                Self::release();
                 Err(error)
             }
+        }
+    }
+    fn active() -> bool {
+        TERMINAL_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn release() {
+        if TERMINAL_ACTIVE.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            restore_terminal();
         }
     }
 }
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        restore_terminal();
+        Self::release();
     }
 }
 fn restore_terminal() {
@@ -1395,9 +1428,6 @@ mod failure_tests {
 pub fn color_level(is_tty: bool) -> u8 {
     color_level_with(is_tty, &std::env::vars().collect())
 }
-pub fn color_enabled(is_tty: bool) -> bool {
-    color_level(is_tty) > 0
-}
 fn color_level_with(is_tty: bool, env: &std::collections::HashMap<String, String>) -> u8 {
     if env.contains_key("NO_COLOR") {
         return 0;
@@ -1515,25 +1545,27 @@ pub fn quantize(color: Color, level: u8) -> Color {
                 + (i32::from(b) - i32::from(*bb)).pow(2)
         })
         .map_or(7, |(i, _)| i);
-    [
-        Color::Black,
-        Color::Red,
-        Color::Green,
-        Color::Yellow,
-        Color::Blue,
-        Color::Magenta,
-        Color::Cyan,
-        Color::Gray,
-        Color::DarkGray,
-        Color::LightRed,
-        Color::LightGreen,
-        Color::LightYellow,
-        Color::LightBlue,
-        Color::LightMagenta,
-        Color::LightCyan,
-        Color::White,
-    ][index]
+    BASIC_COLORS[index]
 }
+/// The 16 ANSI colors in SGR order: 30-37 then 90-97.
+pub const BASIC_COLORS: [Color; 16] = [
+    Color::Black,
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::Gray,
+    Color::DarkGray,
+    Color::LightRed,
+    Color::LightGreen,
+    Color::LightYellow,
+    Color::LightBlue,
+    Color::LightMagenta,
+    Color::LightCyan,
+    Color::White,
+];
 
 #[cfg(test)]
 mod color_tests {
