@@ -59,6 +59,7 @@ pub struct AnalysisInput {
     pub redacted_command: Option<String>,
 }
 pub fn resolve_analysis_provider(home: &Path, env: &HashMap<String, String>) -> AnalysisProvider {
+    #[cfg(debug_assertions)]
     if let Some(raw) = env
         .get("SWEEP_TEST_RESPONSES")
         .map(|s| s.trim())
@@ -89,11 +90,19 @@ pub fn resolve_analysis_provider(home: &Path, env: &HashMap<String, String>) -> 
             ),
         };
     }
-    match crate::config::load(home, env)
-        .and_then(|config| crate::config::resolve_provider(&config, env))
+    let config = match crate::config::load(home, env) {
+        Ok(config) => config,
+        Err(reason) => return AnalysisProvider::Broken(reason),
+    };
+    if config
+        .get("defaultProvider")
+        .is_none_or(|name| name.is_null() || name.as_str().is_some_and(str::is_empty))
     {
+        return AnalysisProvider::None;
+    }
+    match crate::config::resolve_provider(&config, env) {
         Ok(provider) => AnalysisProvider::Real(provider),
-        Err(_) => AnalysisProvider::None,
+        Err(reason) => AnalysisProvider::Broken(reason),
     }
 }
 
@@ -593,6 +602,62 @@ mod tests {
             }
         ));
     }
+    #[tokio::test]
+    async fn configured_provider_errors_remain_visible() {
+        let home = tempfile::tempdir().unwrap();
+        for (config, expected) in [
+            (
+                json!({"defaultProvider":"openai"}),
+                "provider \"openai\" not found in config.",
+            ),
+            (
+                json!({"defaultProvider":"openai","providers":{"openai":{}}}),
+                "provider \"openai\" has no model set in config.",
+            ),
+            (
+                json!({"defaultProvider":"openai","providers":{"openai":{"model":"example","apiKey":"$MISSING_KEY"}}}),
+                "environment variable MISSING_KEY is not set.",
+            ),
+        ] {
+            let env = HashMap::from([("SWEEP_CONFIG".into(), config.to_string())]);
+            let result = analyze_script(
+                input(),
+                resolve_analysis_provider(home.path(), &env),
+                CancellationToken::new(),
+            )
+            .await;
+            assert_eq!(
+                result,
+                AnalysisResult::Analyzed {
+                    analysis: AnalysisPass::Failed {
+                        reason: expected.into()
+                    },
+                    manipulation: ManipulationPass::Failed {
+                        reason: expected.into()
+                    },
+                }
+            );
+        }
+        assert!(matches!(
+            resolve_analysis_provider(home.path(), &HashMap::new()),
+            AnalysisProvider::None
+        ));
+    }
+    #[test]
+    fn canned_environment_is_debug_only() {
+        let home = tempfile::tempdir().unwrap();
+        let env = HashMap::from([(
+            "SWEEP_TEST_RESPONSES".into(),
+            json!({"analysis":valid(),"manipulation":{"manipulationDetected":false}}).to_string(),
+        )]);
+        let provider = resolve_analysis_provider(home.path(), &env);
+        if cfg!(debug_assertions) {
+            assert!(matches!(provider, AnalysisProvider::Test { .. }));
+        } else {
+            assert!(matches!(provider, AnalysisProvider::None));
+        }
+    }
+    #[cfg(debug_assertions)]
     #[test]
     fn broken_canned_seam_wins_over_invalid_config() {
         let home = tempfile::tempdir().unwrap();

@@ -8,7 +8,8 @@ RUN cargo build --locked --release
 
 FROM build AS verify
 COPY tests ./tests
-RUN cargo test --locked && python3 tests/terminal.py target/release/sweep
+# PTY fixtures use the debug-only canned-response seam; separately check release gating.
+RUN cargo test --locked && cargo build --locked && python3 tests/terminal.py target/debug/sweep && cargo test --locked --release canned_environment_is_debug_only
 
 FROM ubuntu:24.04 AS sandbox
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git sudo sqlite3 zsh && rm -rf /var/lib/apt/lists/*
