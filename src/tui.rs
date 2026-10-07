@@ -1118,9 +1118,13 @@ pub fn derive_view(result: crate::analyze::AnalysisResult, source: &str) -> Insi
         }
         AnalysisResult::Analyzed {
             analysis: AnalysisPass::Failed { reason },
-            ..
+            manipulation,
         } => {
-            view.kind = InsightKind::AnalysisFailed;
+            view.kind = if manipulation == ManipulationPass::Fired {
+                InsightKind::Manipulation
+            } else {
+                InsightKind::AnalysisFailed
+            };
             view.message = format!("Couldn't analyze: {reason}.");
         }
         AnalysisResult::Analyzed {
@@ -1221,7 +1225,7 @@ mod session_tests {
     use super::*;
     use crate::analyze::{AnalysisPass, AnalysisResult, ManipulationPass, Severity};
     #[test]
-    fn failed_manipulation_is_untrusted_and_failed_analysis_takes_precedence() {
+    fn failed_manipulation_is_untrusted() {
         let view = derive_view(
             AnalysisResult::Analyzed {
                 analysis: AnalysisPass::Ok {
@@ -1238,6 +1242,9 @@ mod session_tests {
         );
         assert_eq!(view.kind, InsightKind::Manipulation);
         assert_eq!(view.source, "example.com/install");
+    }
+    #[test]
+    fn fired_manipulation_requires_typed_approval_when_analysis_fails() {
         let view = derive_view(
             AnalysisResult::Analyzed {
                 analysis: AnalysisPass::Failed {
@@ -1247,9 +1254,18 @@ mod session_tests {
             },
             "https://example.com/",
         );
-        assert_eq!(view.kind, InsightKind::AnalysisFailed);
+        assert_eq!(view.kind, InsightKind::Manipulation);
         assert_eq!(view.message, "Couldn't analyze: Timeout.");
         assert_eq!(view.source, "example.com");
+        let mut ui = Ui::new(Phase::Resolved(view), Appearance::Dark, false);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(ui.key(key(KeyCode::Enter)), Action::None);
+        ui.key(key(KeyCode::Right));
+        assert_eq!(ui.key(key(KeyCode::Enter)), Action::None);
+        ui.paste("INSTALL");
+        assert_eq!(ui.key(key(KeyCode::Enter)), Action::None);
+        ui.paste("install");
+        assert_eq!(ui.key(key(KeyCode::Enter)), Action::Run);
     }
     #[test]
     fn invalid_paste_stays_inline_and_never_becomes_an_invocation() {

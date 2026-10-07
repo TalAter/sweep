@@ -14,6 +14,7 @@ result allows an unqualified summary. Danger and untrusted analysis require typi
 `install`; other resolved states default to Cancel.
 
 Analysis failure stays visible in the review and does not prevent approval.
+Detected manipulation always requires typing `install`, even when analysis fails.
 Fetch failure ends the session because there are no script bytes to approve.
 Both passes receive URL provenance and the command with recognized secret values
 redacted. Analysis never executes downloaded content.
