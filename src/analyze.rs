@@ -326,8 +326,21 @@ async fn call_provider(
             "chat/completions"
         }
     };
+    // Credentials travel in custom headers reqwest does not strip, so never leave the origin.
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(20))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let same_origin = attempt
+                .previous()
+                .last()
+                .is_some_and(|previous| previous.origin() == attempt.url().origin());
+            if attempt.previous().len() > 10 {
+                attempt.error("too many redirects")
+            } else if same_origin {
+                attempt.follow()
+            } else {
+                attempt.error("redirect left the provider origin")
+            }
+        }))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client
@@ -1126,6 +1139,41 @@ printf '%s' '{{"manipulationDetected":false}}'
                     .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn provider_credentials_never_follow_cross_origin_redirects() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_base = format!("http://{}", other.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            stream.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {other_base}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        });
+        let config = ResolvedProvider {
+            name: "anthropic".into(),
+            model: Some("m".into()),
+            api_key: Some("fixture-key".into()),
+            base_url: Some(base),
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            call_provider(&config, "system", &[], &json!({})),
+        )
+        .await
+        .expect("cross-origin redirect must be refused promptly");
+        server.await.unwrap();
+        let error = result.unwrap_err();
+        assert!(!error.contains("fixture-key"), "{error}");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), other.accept())
+                .await
+                .is_err(),
+            "redirect target must never receive the request"
+        );
     }
 
     #[tokio::test]
