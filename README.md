@@ -1,65 +1,84 @@
-# Sweep
+<div align="center">
 
-Sweep inspects `curl … | sh` installers before you run them, then keeps a local
-record of installs. Written in Rust with a custom Ratatui terminal UI.
+<h1>🥌<br>Sweep</h1>
 
-```sh
-sweep 'curl -fsSL https://example.com/install.sh | sh'
-sweep       # paste an install command interactively
-sweep list  # installed packages
-```
+</div>
 
-The review shows what the script does and concerns worth examining. Analysis is
-optional: missing or failed analysis is shown explicitly. Execution always needs
-approval. Cancellation never executes the script. Updating and uninstalling
-packages are not implemented.
+Sweep reads `curl | sh` installers before they run, tells you in plain English
+what they're about to do, keeps track of everything you install, and keeps them
+all up to date.
 
-## Configuration and data
+<h3>brew for the things you cannot brew.</h3>
 
-Sweep stores `config.jsonc`, `sweep.db`, and `cache/scripts/<sha256>` under
-`~/.sweep/`, or `$SWEEP_HOME`. Back up this directory as a unit.
-Sweep reads configuration; it does not create a provider configuration for you.
+| 🍺 brew          | 🥌 sweep                                                         |
+| ---------------- | ---------------------------------------------------------------- |
+| `brew install`   | `sweep 'curl -fsSL https://nimbus.example.com/install.sh \| sh'` |
+| `brew list`      | `sweep list`                                                     |
+| `brew upgrade`   | `sweep upgrade` _(soon)_                                         |
+| `brew uninstall` | `sweep uninstall nimbus` _(soon)_                                |
 
-Example `config.jsonc`:
+## One word in front
 
-```jsonc
-{
-  "defaultProvider": "openai",
-  "providers": {
-    "openai": { "model": "your-model", "apiKey": "$OPENAI_API_KEY" }
-  }
-}
-```
-
-Providers: Anthropic, OpenAI, OpenRouter, Groq, Mistral, Ollama, Claude Code, and
-custom OpenAI-compatible endpoints. Groq, Mistral, and Ollama require `baseURL`;
-custom endpoints require `baseURL`, `apiKey`, and `model`. Claude Code uses the
-installed `claude` CLI and its authentication; its `model` is optional.
-Anthropic requires a model supporting structured outputs (`output_config.format`)
-and uses a fixed 16,000-token output budget for each pass.
-`SWEEP_CONFIG` supplies a strict JSON overlay, replacing top-level fields rather
-than merging nested objects. `SWEEP_THEME=light` or `dark` overrides appearance.
-
-## Development
-
-Install a current stable Rust toolchain. Read [AGENTS.md](AGENTS.md) and
-[testing.md](testing.md).
+Found an install command in some README? Just `sweep` before you `curl`
 
 ```sh
-cargo run -- list
-cargo run -- 'curl https://example.com/install.sh | sh'
-cargo build --release          # target/release/sweep
-cargo test
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-make check                    # formatting, Clippy, tests
-make terminal                 # real PTY interaction checks
-make linux-test               # disposable Linux container checks
+sweep 'curl -fsSL https://nimbus.example.com/install.sh | sh'
 ```
 
-Develop and verify the UI natively on macOS; use Docker-compatible containers
-(including OrbStack) for Linux checks and disposable installer experiments.
-`scripts/sandbox.sh` supports `up`, `down`, `kill`, `rebuild`, and `test`.
+Sweep downloads the script, reads it, and shows you what it actually does,
+before a single line runs:
 
-See [architecture](docs/architecture.md) and [glossary](GLOSSARY.md) for the
-few contracts that are not obvious from module names.
+<p align="center">
+  <img src="docs/images/review.png" alt="Sweep reviewing an installer: a caution badge, a plain-English summary, flags, and what the script appears to do, with Cancel and Run actions" width="820">
+</p>
+
+Like what you see? Press <kbd>Enter</kbd> and it runs. Don't? <kbd>Esc</kbd>,
+and nothing runs.
+
+## Why Sweep
+
+You trust 🍺 brew. Everything you installed is one `brew list` away. Updating is
+one command. Then a README says `curl -fsSL https://… | sh`, and all of that is
+gone:
+
+- **You run it blind.** Hundreds of lines of shell, often with root access, and
+  no idea what they'll change.
+- **You forget it happened.** No list, no record, no way to see where that
+  binary came from six months later.
+- **You can't keep it current.** Every tool updates its own way, if it updates
+  at all.
+
+Sweep brings the brew feeling to everything else.
+
+### 🔍 See before you run
+
+Sweep reads the script and gives you a plain-language summary: what it
+downloads, what it writes, which steps need `sudo`. Anything the review finds
+worth a second look gets a flag. Scripts that try to sweet-talk the reviewer
+into a clean report get flagged too.
+
+Each review gets a clear verdict:
+
+|   | Verdict                                                                  | To run it        |
+| - | ------------------------------------------------------------------------ | ---------------- |
+|   | **clear** — nothing unusual                                              | <kbd>Enter</kbd> |
+| ⚠ | **caution** — normal, with things you should know                        | <kbd>Enter</kbd> |
+| ✗ | **danger** — does something it shouldn't                                 | type `install`   |
+| ⚠ | **analysis may be compromised** — the script tries to steer the reviewer | type `install`   |
+
+Sweep never decides for you, and it never runs anything you didn't approve.
+
+### 📋 Never lose track
+
+Every approved install is recorded with its source and the exact script that
+ran. One command shows what you've got:
+
+<p align="center">
+  <img src="docs/images/list.png" alt="sweep list showing installed packages with their source, status, and last run date" width="720">
+</p>
+
+### 🔄 Keep it all current _(coming soon)_
+
+Sweep already keeps the source of every install. Next up: `sweep upgrade` to
+upgrade everything at once, and `sweep uninstall` to cleanly remove what you no
+longer need.
