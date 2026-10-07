@@ -8,6 +8,7 @@ RUN cargo build --locked --release
 
 FROM build AS verify
 COPY tests ./tests
+COPY examples ./examples
 # PTY fixtures use the debug-only canned-response seam; separately check release gating.
 RUN cargo test --locked && cargo build --locked && python3 tests/terminal.py target/debug/sweep && cargo test --locked --release canned_environment_is_debug_only
 

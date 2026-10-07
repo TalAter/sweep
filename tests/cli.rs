@@ -12,6 +12,20 @@ fn sweep(home: &TempDir, args: &[&str]) -> Output {
 }
 
 #[test]
+fn missing_command_without_a_terminal_is_a_usage_error_and_records_nothing() {
+    let home = TempDir::new().unwrap();
+    let output = sweep(&home, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("usage"));
+    let db = rusqlite::Connection::open(home.path().join("sweep.db")).unwrap();
+    let n: i64 = db
+        .query_row("SELECT COUNT(*) FROM invocations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
 fn empty_list_is_payload_only_and_creates_compatible_home() {
     let home = TempDir::new().unwrap();
     let output = sweep(&home, &["list"]);
@@ -49,17 +63,6 @@ fn parse_failure_records_one_trimmed_attempt_and_exits_two() {
         )
         .unwrap();
     assert_eq!(rows, (1, "nonsense".into(), "parse_failed".into(), None));
-}
-
-#[test]
-fn absent_command_without_terminal_is_parse_failure() {
-    let home = TempDir::new().unwrap();
-    let output = sweep(&home, &[]);
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "sweep: empty input\n"
-    );
 }
 
 #[test]

@@ -303,11 +303,9 @@ async fn call_provider(
         "anthropic" => {
             body["system"] = Value::String(system.into());
             body["messages"] = Value::Array(messages.to_vec());
-            body["max_tokens"] = Value::from(anthropic_output_limit(
-                config.model.as_deref().unwrap_or_default(),
-            ));
-            body["tools"] = serde_json::json!([{"name":"sweep_analysis","description":"Return the requested structured analysis.","input_schema":schema}]);
-            body["tool_choice"] = serde_json::json!({"type":"tool","name":"sweep_analysis"});
+            body["max_tokens"] = Value::from(16000);
+            body["output_config"] =
+                serde_json::json!({"format":{"type":"json_schema","schema":schema}});
             "messages"
         }
         "openai" => {
@@ -335,8 +333,21 @@ async fn call_provider(
             "chat/completions"
         }
     };
+    // Credentials travel in custom headers reqwest does not strip, so never leave the origin.
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(20))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let same_origin = attempt
+                .previous()
+                .last()
+                .is_some_and(|previous| previous.origin() == attempt.url().origin());
+            if attempt.previous().len() > 10 {
+                attempt.error("too many redirects")
+            } else if same_origin {
+                attempt.follow()
+            } else {
+                attempt.error("redirect left the provider origin")
+            }
+        }))
         .build()
         .map_err(|e| e.to_string())?;
     let mut request = client
@@ -395,14 +406,9 @@ async fn call_provider(
             let content = value["content"]
                 .as_array()
                 .ok_or("Model returned no structured output.")?;
-            if let Some(tool) = content
-                .iter()
-                .find(|item| item["type"] == "tool_use" && item["name"] == "sweep_analysis")
-            {
-                return Ok(tool["input"].to_string());
-            }
             content
                 .iter()
+                .filter(|item| item["type"] == "text")
                 .filter_map(|item| item["text"].as_str())
                 .reduce(|_, last| last)
                 .map(str::to_string)
@@ -423,32 +429,6 @@ async fn call_provider(
             .as_str()
             .map(str::to_string)
             .ok_or("Model returned no structured output.".into()),
-    }
-}
-fn anthropic_output_limit(model: &str) -> u64 {
-    // Model families have different output ceilings. Unknown/proxy models use
-    // a conservative budget to avoid rejecting otherwise valid requests.
-    if [
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-fable-5",
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-    ]
-    .iter()
-    .any(|family| model.contains(family))
-    {
-        128000
-    } else if ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"]
-        .iter()
-        .any(|family| model.contains(family))
-        || model.contains("claude-sonnet-4-")
-    {
-        64000
-    } else if model.contains("claude-opus-4-") {
-        32000
-    } else {
-        4096
     }
 }
 fn retry_delay(
@@ -738,7 +718,7 @@ mod tests {
                         valid()
                     };
                     let response=match name_owned.as_str(){
-    "anthropic"=>json!({"content":[{"type":"tool_use","name":"sweep_analysis","input":reply}]}),
+    "anthropic"=>json!({"content":[{"type":"text","text":reply.to_string()}]}),
     "openai"=>json!({"output":[{"type":"message","content":[{"type":"output_text","text":reply.to_string()}]}]}),
     _=>json!({"choices":[{"message":{"content":reply.to_string()}}]})
    }.to_string();
@@ -784,7 +764,9 @@ mod tests {
                 match name {
                     "anthropic" => {
                         assert!(headers.starts_with("POST /v1/messages"));
-                        assert_eq!(body["tool_choice"]["type"], "tool");
+                        assert_eq!(body["output_config"]["format"]["type"], "json_schema");
+                        assert!(body.get("tools").is_none());
+                        assert!(body.get("tool_choice").is_none());
                         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
                     }
                     "openai" => {
@@ -1106,57 +1088,87 @@ printf '%s' '{{"manipulationDetected":false}}'
     }
 
     #[tokio::test]
-    async fn anthropic_requests_preserve_model_output_limits() {
+    async fn anthropic_passes_use_structured_text_with_a_fixed_output_budget() {
         use tokio::io::AsyncWriteExt;
-        for (model, limit) in [
-            ("claude-3-haiku-20240307", 4096),
-            ("proxy-model", 4096),
-            ("claude-sonnet-4-20250514", 64000),
-            ("claude-opus-4-20250514", 32000),
-            ("claude-opus-4-1-20250805", 32000),
-            ("claude-haiku-4-5", 64000),
-            ("claude-sonnet-4-5", 64000),
-            ("claude-opus-4-5", 64000),
-            ("claude-sonnet-4-6", 128000),
-            ("claude-opus-4-6", 128000),
-            ("claude-opus-4-7", 128000),
-            ("claude-opus-4-8", 128000),
-            ("claude-fable-5", 128000),
+        for model in [
+            "claude-fable-5-1",
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-4-5",
+            "proxy-model",
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let request = read_request(&mut stream).await;
-                let requested = request["max_tokens"].as_u64().unwrap();
-                let (status, body) = if requested > limit {
-                    (400, "max_tokens exceeds model output limit".to_string())
-                } else {
-                    (
-                        200,
-                        json!({"content":[{"type":"tool_use","name":"sweep_analysis","input":{}}]})
+                let mut requests = Vec::new();
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let request = read_request(&mut stream).await;
+                    let manipulation = request["system"]
+                        .as_str()
+                        .unwrap()
+                        .contains("security reviewer");
+                    let reply = if manipulation {
+                        json!({"manipulationDetected":false})
+                    } else {
+                        valid()
+                    };
+                    let (status, body) = if request.get("tool_choice").is_some() {
+                        (400, "Forced tool use is not supported".to_string())
+                    } else {
+                        (
+                            200,
+                            json!({"content":[
+                                {"type":"thinking","thinking":"Reviewing the script."},
+                                {"type":"text","text":reply.to_string()}
+                            ],"stop_reason":"end_turn"})
                             .to_string(),
-                    )
-                };
-                stream.write_all(format!("HTTP/1.1 {status} fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-                requested
+                        )
+                    };
+                    stream.write_all(format!("HTTP/1.1 {status} fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                    requests.push((manipulation, request));
+                }
+                requests
             });
-            let config = ResolvedProvider {
-                name: "anthropic".into(),
-                model: Some(model.into()),
-                api_key: Some("fixture-key".into()),
-                base_url: Some(base),
-            };
-            let result = call_provider(&config, "system", &[], &json!({})).await;
-            let requested = server.await.unwrap();
+            let result = analyze_script(
+                input(),
+                AnalysisProvider::Real(ResolvedProvider {
+                    name: "anthropic".into(),
+                    model: Some(model.into()),
+                    api_key: Some("fixture-key".into()),
+                    base_url: Some(base),
+                }),
+                CancellationToken::new(),
+            )
+            .await;
+            let requests = server.await.unwrap();
             assert_eq!(
-                result.unwrap_or_else(|error| panic!("{model}: {error}")),
-                "{}"
+                result,
+                AnalysisResult::Analyzed {
+                    analysis: AnalysisPass::Ok {
+                        severity: Severity::Clear,
+                        summary: "Simple script.".into(),
+                        flags: vec![],
+                        behaviors: vec![Behavior {
+                            description: "Prints hello".into(),
+                            sudo: false,
+                        }],
+                    },
+                    manipulation: ManipulationPass::Clean,
+                },
+                "{model}"
             );
-            assert_eq!(
-                requested, limit,
-                "use the supported output budget for {model}"
-            );
+            assert_ne!(requests[0].0, requests[1].0, "both passes must run");
+            for (manipulation, request) in requests {
+                assert_eq!(request["model"], model);
+                assert_eq!(request["max_tokens"], 16000, "{model}");
+                assert!(request.get("tools").is_none());
+                assert!(request.get("tool_choice").is_none());
+                assert_eq!(
+                    request["output_config"],
+                    json!({"format":{"type":"json_schema","schema":prompt(manipulation).1}})
+                );
+            }
         }
     }
 
@@ -1191,6 +1203,41 @@ printf '%s' '{{"manipulationDetected":false}}'
                     .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn provider_credentials_never_follow_cross_origin_redirects() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_base = format!("http://{}", other.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await;
+            stream.write_all(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {other_base}/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        });
+        let config = ResolvedProvider {
+            name: "anthropic".into(),
+            model: Some("m".into()),
+            api_key: Some("fixture-key".into()),
+            base_url: Some(base),
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            call_provider(&config, "system", &[], &json!({})),
+        )
+        .await
+        .expect("cross-origin redirect must be refused promptly");
+        server.await.unwrap();
+        let error = result.unwrap_err();
+        assert!(!error.contains("fixture-key"), "{error}");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), other.accept())
+                .await
+                .is_err(),
+            "redirect target must never receive the request"
+        );
     }
 
     #[tokio::test]

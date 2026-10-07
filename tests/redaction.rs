@@ -101,3 +101,20 @@ fn private_keys_and_dash_prefixed_fetcher_credentials_are_hidden() {
         );
     }
 }
+
+#[test]
+fn fetcher_redaction_follows_parser_literal_words() {
+    for raw in [
+        "curl -u \\\n user:private https://example.com/i | sh",
+        "curl -H \\\n 'Authorization: private' https://example.com/i | sh",
+        "'curl' -u user:private https://example.com/i | sh",
+        "cu\"rl\" -u user:private https://example.com/i | sh",
+        "curl --us\\\ner user:private https://example.com/i | sh",
+        "curl -H \"Authori\\\nzation: private\" https://example.com/i | sh",
+        "bash <('cu'rl -u user:private https://example.com/i)",
+        "bash -c \"$(cu'rl' -u user:private https://example.com/i)\"",
+    ] {
+        let cmd = parse_install_command(raw).unwrap();
+        assert!(!redact_command(&cmd).contains("private"), "{raw}");
+    }
+}

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::IsTerminal, path::PathBuf};
+use std::{
+    collections::HashMap,
+    io::{IsTerminal, Write},
+    path::PathBuf,
+};
 use sweep::{
     analyze, config, parse,
     store::{Invocation, Store, now},
@@ -18,9 +22,15 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<i32> {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let home = env
-        .get("SWEEP_HOME")
+    let env: HashMap<String, String> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+    let home = std::env::var_os("SWEEP_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -28,32 +38,33 @@ async fn run() -> anyhow::Result<i32> {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".sweep")
         });
-    std::fs::create_dir_all(&home)?;
     config::load(&home, &env).map_err(anyhow::Error::msg)?;
-    let positional = std::env::args()
-        .nth(1)
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
     let mut store = Store::open(&home)?;
+    let positional = std::env::args_os()
+        .nth(1)
+        .map(|arg| arg.to_string_lossy().trim().to_owned())
+        .unwrap_or_default();
     if positional == "list" {
         let packages = store.list_installed_packages()?;
-        if packages.is_empty() {
-            println!("No packages installed.");
+        let text = if packages.is_empty() {
+            "No packages installed.\n".to_owned()
         } else {
-            print!(
-                "{}",
-                sweep::app::format_list(
-                    &packages,
-                    tui::color_level(std::io::stdout().is_terminal()),
-                    tui::resolve_appearance(&home)
-                )
-            );
-        }
-        return Ok(0);
+            let level = tui::color_level(std::io::stdout().is_terminal());
+            let appearance = if level > 0 {
+                tui::resolve_appearance(&home)
+            } else {
+                tui::Appearance::Dark
+            };
+            sweep::app::format_list(&packages, level, appearance)
+        };
+        return print_stdout(&text).map(|()| 0);
     }
     let started = now();
-    let start = if positional.is_empty() && std::io::stdout().is_terminal() {
+    let start = if positional.is_empty() {
+        if !std::io::stdout().is_terminal() {
+            eprintln!("sweep: usage: sweep 'curl https://example.com/install.sh | sh'");
+            return Ok(2);
+        }
         tui::SessionStart::Interactive
     } else {
         match parse::parse_install_command(&positional) {
@@ -104,4 +115,12 @@ async fn run() -> anyhow::Result<i32> {
             }
         };
     sweep::app::finish_install(&mut store, &started, decision)
+}
+/// A closed pipe (`sweep list | head`) is not an error for the caller.
+fn print_stdout(text: &str) -> anyhow::Result<()> {
+    let mut out = std::io::stdout().lock();
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => Ok(result?),
+    }
 }

@@ -35,38 +35,59 @@ fn secret(name: &str) -> bool {
 
 // Scan one literal shell word without evaluating expansions. Adjacent quoted and
 // unquoted fragments belong to the same value, including escaped whitespace.
-fn word(raw: &str, start: usize) -> (usize, String) {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut decoded = String::new();
-    for (offset, ch) in raw[start..].char_indices() {
-        if escaped {
-            decoded.push(ch);
-            escaped = false;
-        } else if ch == '\\' && quote != Some('\'') {
-            escaped = true;
-        } else if quote == Some(ch) {
-            quote = None;
-        } else if quote.is_none() && matches!(ch, '\'' | '"') {
-            quote = Some(ch);
-        } else if quote.is_none() && (ch.is_whitespace() || matches!(ch, '|' | ')')) {
-            return (start + offset, decoded);
-        } else {
-            decoded.push(ch);
+fn word(raw: &str, mut start: usize) -> (usize, String) {
+    loop {
+        let mut quote = None;
+        let mut escaped = false;
+        let mut end = raw.len();
+        for (offset, ch) in raw[start..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' && quote != Some('\'') {
+                escaped = true;
+            } else if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() && matches!(ch, '\'' | '"') {
+                quote = Some(ch);
+            } else if quote.is_none() && (ch.is_whitespace() || matches!(ch, '|' | ')')) {
+                end = start + offset;
+                break;
+            }
         }
+        let parsed = crate::parse::shell_word(&raw[start..end]);
+        if parsed.as_ref().is_ok_and(|word| !word.present)
+            && raw[end..].starts_with(char::is_whitespace)
+        {
+            start = end + raw[end..].len() - raw[end..].trim_start().len();
+            continue;
+        }
+        let decoded = parsed
+            .map(|word| word.text)
+            .unwrap_or_else(|_| raw[start..end].to_owned());
+        return (end, decoded);
     }
-    (raw.len(), decoded)
 }
 fn value_end(raw: &str, start: usize) -> usize {
-    word(raw, start).0
+    crate::parse::shell_word(&raw[start..])
+        .map(|word| start + word.used)
+        .unwrap_or(raw.len())
 }
 
 fn fetcher_secrets(raw: &str, spans: &mut Vec<(usize, usize)>) {
-    // Also locate the fetcher inside the two supported substitution wrappers.
-    let fetcher =
-        regex::Regex::new(r"(?:^|[\s(])(?:[^\s()|]*/)?(?:curl|wget)\s+").expect("fetcher anchor");
-    for found in fetcher.find_iter(raw) {
-        let mut cursor = found.end();
+    // Decode executable words too: quoted names and removed line continuations
+    // must have the same meaning here as they do in the install parser.
+    let boundaries = regex::Regex::new(r"(?:^|[\s(])").expect("word boundary");
+    let mut scanned_until = 0;
+    for boundary in boundaries.find_iter(raw) {
+        let start = boundary.end();
+        if start < scanned_until && !raw[..start].ends_with('(') {
+            continue;
+        }
+        let (mut cursor, executable) = word(raw, start);
+        scanned_until = cursor;
+        if !matches!(executable.rsplit('/').next(), Some("curl" | "wget")) {
+            continue;
+        }
         while cursor < raw.len() {
             cursor += raw[cursor..].len() - raw[cursor..].trim_start().len();
             let (end, token) = word(raw, cursor);
@@ -168,18 +189,43 @@ pub fn redact_command(cmd: &InstallCommand) -> String {
         .map(|s| s.split('=').next().unwrap_or(s))
         .filter(|s| s.starts_with('-') && secret(s))
         .collect();
-    for flag in flags {
-        let re = regex::Regex::new(&format!(r"(?:^|\s){}(=|\s|$)", regex::escape(flag)))
-            .expect("escaped anchor");
-        for cap in re.captures_iter(raw) {
-            let mut start = cap.get(0).unwrap().end();
-            if &cap[1] != "=" {
-                start += raw[start..].len() - raw[start..].trim_start().len();
-                if start == raw.len() || raw[start..].starts_with('-') {
-                    continue;
-                }
-            }
-            spans.push((start, value_end(raw, start)));
+    let mut tokens = Vec::new();
+    let mut rest = raw.as_str();
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let start = raw.len() - rest.len();
+        let (word, used, present) = crate::parse::shell_word(rest)
+            .map(|word| (word.text, word.used, word.present))
+            .unwrap_or_else(|_| (rest.to_owned(), rest.len(), true));
+        if present {
+            tokens.push((start, start + used, word));
+        }
+        rest = &rest[used..];
+    }
+    for (i, (start, end, word)) in tokens.iter().enumerate() {
+        let (flag, inline) = word
+            .split_once('=')
+            .map_or((word.as_str(), false), |(f, _)| (f, true));
+        if !flags.contains(flag) {
+            continue;
+        }
+        if inline {
+            // Preserve conventional flag spelling; quoted/concatenated spellings
+            // need the whole source word redacted to avoid leaving secret bytes.
+            let prefix = format!("{flag}=");
+            let value_start = if raw[*start..*end].starts_with(&prefix) {
+                start + prefix.len()
+            } else {
+                *start
+            };
+            spans.push((value_start, *end));
+        } else if let Some((value_start, value_end, _)) = tokens.get(i + 1)
+            && !raw[*value_start..*value_end].starts_with('-')
+        {
+            spans.push((*value_start, *value_end));
         }
     }
     spans.sort_unstable();
