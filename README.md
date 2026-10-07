@@ -32,7 +32,7 @@ before a single line runs:
   <img src="docs/images/review.png" alt="Sweep reviewing an installer: a caution badge, a plain-English summary, flags, and what the script appears to do, with Cancel and Run actions" width="820">
 </p>
 
-Like what you see? Press <kbd>Enter</kbd> and it runs. Don't? <kbd>Esc</kbd>,
+Like what you see? Press <kbd>→</kbd> <kbd>Enter</kbd> and it runs. Don't? <kbd>Esc</kbd>,
 and nothing runs.
 
 ## Why Sweep
@@ -61,8 +61,8 @@ Each review gets a clear verdict:
 
 |   | Verdict                                                                  | To run it        |
 | - | ------------------------------------------------------------------------ | ---------------- |
-|   | **clear** — nothing unusual                                              | <kbd>Enter</kbd> |
-| ⚠ | **caution** — normal, with things you should know                        | <kbd>Enter</kbd> |
+|   | **clear** — nothing unusual                                              | <kbd>→</kbd> <kbd>Enter</kbd> |
+| ⚠ | **caution** — normal, with things you should know                        | <kbd>→</kbd> <kbd>Enter</kbd> |
 | ✗ | **danger** — does something it shouldn't                                 | type `install`   |
 | ⚠ | **analysis may be compromised** — the script tries to steer the reviewer | type `install`   |
 
