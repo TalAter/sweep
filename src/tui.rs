@@ -653,6 +653,49 @@ mod tests {
             .collect::<String>()
     }
     #[test]
+    fn idle_frames_are_skipped_but_changes_and_loading_animation_draw() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut ui = Ui::new(Phase::Paste { error: None }, Appearance::Dark, false);
+        let mut dirty = true;
+        for tick in 0..40 {
+            ui.tick = tick;
+            draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        }
+        assert_eq!(terminal.get_frame().count(), 1, "idle UI should draw once");
+        ui.paste("curl https://example.com/i | sh");
+        dirty = true;
+        draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        assert_eq!(terminal.get_frame().count(), 2);
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+                .contains("curl https://example.com/i")
+        );
+        terminal.backend_mut().resize(100, 30);
+        dirty = true;
+        draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        assert_eq!(terminal.get_frame().area(), Rect::new(0, 0, 100, 30));
+        ui.transition(Phase::Loading {
+            source: "example.com/i".into(),
+        });
+        dirty = true;
+        for tick in 0..10 {
+            ui.tick = tick;
+            draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        }
+        assert_eq!(
+            terminal.get_frame().count(),
+            7,
+            "spinner redraws only when its glyph changes"
+        );
+    }
+
+    #[test]
     fn approval_defaults_to_cancel_and_requires_explicit_run_selection() {
         let mut ui = resolved(InsightKind::Clear);
         assert_eq!(ui.key(key(KeyCode::Enter)), Action::Cancel);
@@ -831,6 +874,18 @@ pub async fn run_session(
         .await
         .map_err(|error| Box::new(session.failure(error)))
 }
+fn draw_session_frame<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    ui: &Ui,
+    dirty: &mut bool,
+) -> Result<(), B::Error> {
+    if *dirty || (matches!(ui.phase, Phase::Loading { .. }) && ui.tick.is_multiple_of(3)) {
+        terminal.draw(|frame| ui.render(frame))?;
+        *dirty = false;
+    }
+    Ok(())
+}
+
 async fn run_session_inner(
     session: &mut Session,
     provider: AnalysisProvider,
@@ -843,16 +898,18 @@ async fn run_session_inner(
         .parsed
         .as_ref()
         .map(|parsed| Pipeline::start(parsed.clone(), provider.clone()));
+    let mut dirty = true;
     loop {
         #[cfg(unix)]
         if signals.received() {
             return Ok(session.cancel(pipeline.as_mut()));
         }
-        terminal.terminal.draw(|frame| session.ui.render(frame))?;
+        draw_session_frame(&mut terminal.terminal, &session.ui, &mut dirty)?;
         // Input is processed before asynchronous results so cancellation wins over
         // errors caused by aborting an in-flight request.
         // Crossterm's /dev/tty backend skips reads with a zero timeout.
         while event::poll(std::time::Duration::from_millis(1))? {
+            dirty = true;
             let action = match event::read()? {
                 Event::Key(key) => session.ui.key(key),
                 Event::Paste(text) => {
@@ -880,6 +937,7 @@ async fn run_session_inner(
                 match work.updates.try_recv() {
                     Ok(Update::Fetched(fetched)) => session.fetched = Some(fetched),
                     Ok(Update::Resolved(result)) => {
+                        dirty = true;
                         if let Some(parsed) = &session.parsed {
                             session
                                 .ui
