@@ -4,7 +4,7 @@ use sweep::{
 };
 #[test]
 fn parser_preserves_command_contract_and_refusals() {
-    let raw = "  TOKEN='a && b' VERSION=2 /usr/bin/curl -f 'https://example.com/i?q=1&x=2' | sudo -E /bin/bash -s -- --to /tmp/bin  ";
+    let raw = "  TOKEN='a && b' VERSION=2 /usr/bin/curl -f 'https://example.com/i?q=1&x=2' | sudo /bin/bash -s -- --to /tmp/bin  ";
     let c = parse_install_command(raw).unwrap();
     assert_eq!(c.raw, raw);
     assert_eq!(c.env_vars["TOKEN"], "a && b");
@@ -80,7 +80,7 @@ fn executor_passes_bytes_args_environment_and_exit_status() {
     let home = tempfile::tempdir().unwrap();
     let output = home.path().join("result");
     let mut cmd =
-        parse_install_command("curl https://example.com/i | sh -s -- first second").unwrap();
+        parse_install_command("curl https://example.com/i | sh -s -- 'first arg' ''").unwrap();
     cmd.env_vars
         .insert("OUT".into(), output.display().to_string());
     cmd.env_vars
@@ -93,7 +93,7 @@ fn executor_passes_bytes_args_environment_and_exit_status() {
     assert_eq!(code, 3);
     assert_eq!(
         std::fs::read_to_string(output).unwrap(),
-        "first|second|literal $thing"
+        "first arg||literal $thing"
     );
     cmd.shell = "/definitely/nonexistent/sweep-shell".into();
     assert!(sweep::exec::run_script(&cmd, b"true\n").is_err());
@@ -517,4 +517,170 @@ async fn fetch_decodes_compressed_installer_before_hashing_or_execution() {
         fetched.sha256,
         hex::encode(Sha256::digest(b"#!/bin/sh\ntrue\n"))
     );
+}
+
+#[test]
+fn parser_decodes_shell_words_without_splitting_quoted_arguments() {
+    let cmd = parse_install_command(
+        r#"DEST='/tmp/my '"tools" curl 'https://example.com/i?q=(x)' | bash -s -- 'two words' "" pre"fix" escaped\ space 'a|b' "say \"hi\"""#,
+    ).unwrap();
+    assert_eq!(cmd.env_vars["DEST"], "/tmp/my tools");
+    assert_eq!(cmd.url, "https://example.com/i?q=(x)");
+    assert_eq!(
+        cmd.script_args,
+        [
+            "two words",
+            "",
+            "prefix",
+            "escaped space",
+            "a|b",
+            "say \"hi\""
+        ]
+    );
+    for input in [
+        "curl https://example.com/i | sh -s -- 'unfinished",
+        "curl https://example.com/i | sh -s -- trailing\\",
+    ] {
+        assert!(parse_install_command(input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn parser_selects_one_url_word_and_refuses_ambiguous_downloads() {
+    for input in [
+        "curl https://example.com/i -H 'Referer: https://x' | sh",
+        "bash -c \"$(curl https://example.com/i -H 'Referer: https://x')\"",
+        "bash <(curl https://example.com/i -H 'Referer: https://x')",
+    ] {
+        assert_eq!(
+            parse_install_command(input).unwrap().url,
+            "https://example.com/i"
+        );
+    }
+    for input in [
+        "curl https://first https://second | sh",
+        "bash -c \"$(curl https://first https://second)\"",
+        "bash <(wget https://first https://second)",
+    ] {
+        assert!(parse_install_command(input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn parser_refuses_sudo_options_instead_of_changing_execution_identity() {
+    for prefix in [
+        "sudo --user=alice",
+        "sudo --user alice",
+        "sudo -ualice",
+        "sudo -E",
+        "sudo -n",
+    ] {
+        for input in [
+            format!("curl https://example.com/i | {prefix} bash"),
+            format!("{prefix} bash -c \"$(curl https://example.com/i)\""),
+            format!("{prefix} bash <(curl https://example.com/i)"),
+            format!("{prefix} curl https://example.com/i | bash"),
+        ] {
+            assert!(parse_install_command(&input).is_err(), "{input}");
+        }
+    }
+}
+
+#[test]
+fn redaction_covers_complete_quoted_and_escaped_secret_words() {
+    for (raw, expected) in [
+        (
+            "curl https://example.com/i | sh -- --token \\\n secret",
+            "curl https://example.com/i | sh -- --token \\\n <redacted>",
+        ),
+        (
+            "curl https://example.com/i | sh -- --token '-secret'",
+            "curl https://example.com/i | sh -- --token <redacted>",
+        ),
+        (
+            r"curl https://example.com/i | sh -- --token \-secret",
+            "curl https://example.com/i | sh -- --token <redacted>",
+        ),
+        (
+            r#"curl https://example.com/i | sh -s -- '--token' secret"#,
+            "curl https://example.com/i | sh -s -- '--token' <redacted>",
+        ),
+        (
+            r#"curl https://example.com/i | sh -s -- --to"ken" secret"#,
+            r#"curl https://example.com/i | sh -s -- --to"ken" <redacted>"#,
+        ),
+        (
+            r#"curl https://example.com/i | sh -s -- '--token=secret'"#,
+            "curl https://example.com/i | sh -s -- <redacted>",
+        ),
+        (
+            r#"TOKEN=one" two" curl https://example.com/i | sh"#,
+            "TOKEN=<redacted> curl https://example.com/i | sh",
+        ),
+        (
+            r#"curl https://example.com/i | sh -s -- --token 'one'" two""#,
+            "curl https://example.com/i | sh -s -- --token <redacted>",
+        ),
+        (
+            r#"curl https://example.com/i | sh -s -- --token one\ two"#,
+            "curl https://example.com/i | sh -s -- --token <redacted>",
+        ),
+    ] {
+        assert_eq!(
+            redact_command(&parse_install_command(raw).unwrap()),
+            expected
+        );
+    }
+}
+
+#[test]
+fn parser_refuses_additional_explicit_curl_url_options() {
+    for input in [
+        "curl https://first --url=https://second | sh",
+        "curl --url=https://first https://second | sh",
+    ] {
+        assert!(parse_install_command(input).is_err(), "{input}");
+    }
+}
+
+#[test]
+fn parser_preserves_escaped_trailing_whitespace() {
+    assert_eq!(
+        parse_install_command(r"curl https://example.com/i | sh -- name\ ")
+            .unwrap()
+            .script_args,
+        ["name "]
+    );
+}
+
+#[test]
+fn parser_refuses_expansion_but_preserves_explicit_literals() {
+    for input in [
+        "curl https://example.com/i | sh -- \\\n~/bin",
+        "curl https://example.com/i | sh -- $\\\nHOME",
+        "DEST=$HOME/bin curl https://example.com/i | sh",
+        "DEST=~/bin curl https://example.com/i | sh",
+        "curl https://example.com/i | sh -- $HOME/bin",
+        "curl https://example.com/i | sh -- \"$HOME/bin\"",
+        "curl https://example.com/i | sh -- ${HOME}/bin",
+        "curl https://example.com/i | sh -- ~/bin",
+        "curl https://example.com/i | sh -- `whoami`",
+        "bash -c \"$(curl https://example.com/$VERSION)\"",
+        "bash <(curl https://example.com/$VERSION)",
+    ] {
+        assert!(parse_install_command(input).is_err(), "{input}");
+    }
+    let cmd = parse_install_command(
+        r#"DEST='$HOME/bin' curl https://example.com/i | sh -- '$HOME' '~' \$HOME "\$HOME" "~""#,
+    )
+    .unwrap();
+    assert_eq!(cmd.env_vars["DEST"], "$HOME/bin");
+    assert_eq!(cmd.script_args, ["$HOME", "~", "$HOME", "$HOME", "~"]);
+}
+
+#[test]
+fn parser_skips_line_continuations_but_keeps_empty_quoted_arguments() {
+    let cmd =
+        parse_install_command("curl https://example.com/i | sh -s -- \\\n --foo '' \\\n").unwrap();
+    assert_eq!(cmd.script_args, ["--foo", ""]);
 }

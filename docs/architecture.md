@@ -6,6 +6,18 @@ decision and restores the terminal before `app` saves or executes a script.
 Parsing, downloads, provider communication, and storage have independent modules;
 the session coordinates them without owning persistence.
 
+## Install command parsing
+
+Shell words preserve quoted spaces, empty arguments, concatenated quoted segments,
+and backslash escapes without evaluating a shell. The fetcher must name one HTTP(S)
+URL word (also accepting curl's `--url=` form); URLs embedded in header text do not
+select the installer. Multiple URL words and sudo options are refused rather than
+silently changing the download or execution identity. Plain sudo remains supported.
+Unescaped `$` (including double-quoted `$VAR`), unquoted leading `~`, and
+arbitrary command substitution are refused; use explicit values or single-quoted
+or escaped literals. The recognized `shell -c "$(fetcher ...)"` installer wrapper
+remains supported without evaluating the substitution.
+
 ## Approval and analysis
 
 Two isolated analysis passes run concurrently: one explains the script, the other
