@@ -467,7 +467,19 @@ async fn call_cli(
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
     let mut command = tokio::process::Command::new(program);
-    command.args(["--tools", "", "--system-prompt", system]);
+    // --tools only limits built-ins. Do not load configured MCP servers or
+    // expose MCP tools to untrusted installer text in either analysis pass.
+    command.args([
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--mcp-config",
+        r#"{"mcpServers":{}}"#,
+        "--disallowedTools",
+        "mcp__*",
+        "--system-prompt",
+        system,
+    ]);
     if let Some(model) = &config.model {
         command.args(["--model", model]);
     }
@@ -833,6 +845,9 @@ printf '%s' '{{"manipulationDetected":false}}'
         let request = std::fs::read_to_string(log).unwrap();
         assert!(request.contains("--no-session-persistence"));
         assert!(request.contains("--tools\n\n"));
+        assert!(request.contains("--strict-mcp-config\n"));
+        assert!(request.contains("--mcp-config\n{\"mcpServers\":{}}\n"));
+        assert!(request.contains("--disallowedTools\nmcp__*\n"));
         assert!(request.contains("--model\ntest-model"));
         assert!(request.contains("User: first\n\nAssistant: bad json\n\nUser: Respond ONLY"));
         assert!(!request.starts_with(&std::env::current_dir().unwrap().display().to_string()));
