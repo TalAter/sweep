@@ -126,6 +126,16 @@ def danger(manipulation=False):
         s.until("Type 'install'");s.send('INSTALL\r');time.sleep(.15);assert s.process.poll() is None
         s.send('install\r');assert s.finish(0)[0][0]=='ran'
     finally:s.close()
+def manipulation_after_analysis_failure():
+    canned={'analysis':{},'manipulation':{'manipulationDetected':True}}
+    s=Session([f'curl {URL}/script | sh'],canned)
+    try:
+        s.until("Type 'install'");s.until("Couldn't analyze");s.until('analysis may be compromised')
+        s.send('\r\x1b[C\rINSTALL\r');time.sleep(.15)
+        assert s.process.poll() is None
+        assert b'APPROVED_SCRIPT_RAN' not in s.output
+        s.send('install\r');assert s.finish(0)[0][0]=='ran'
+    finally:s.close()
 def fetch_failure():
     s=Session([f'curl {URL}/missing | sh'])
     try:
@@ -190,5 +200,5 @@ def signal_after_handoff(sig):
         assert s.finish(256-sig)==[]
     finally:s.close()
 
-for name,fn in [('handoff preserves ignored SIGTERM',ignored_signal_after_handoff),('handoff SIGINT',lambda:signal_after_handoff(signal.SIGINT)),('handoff SIGTERM',lambda:signal_after_handoff(signal.SIGTERM)),('handoff SIGHUP',lambda:signal_after_handoff(signal.SIGHUP)),('external SIGTERM',lambda:external_signal(signal.SIGTERM)),('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('fetch failure restoration',fetch_failure)]:run(name,fn)
+for name,fn in [('handoff preserves ignored SIGTERM',ignored_signal_after_handoff),('handoff SIGINT',lambda:signal_after_handoff(signal.SIGINT)),('handoff SIGTERM',lambda:signal_after_handoff(signal.SIGTERM)),('handoff SIGHUP',lambda:signal_after_handoff(signal.SIGHUP)),('external SIGTERM',lambda:external_signal(signal.SIGTERM)),('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('manipulation after analysis failure',manipulation_after_analysis_failure),('fetch failure restoration',fetch_failure)]:run(name,fn)
 server.shutdown()

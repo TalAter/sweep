@@ -31,41 +31,145 @@ fn fetcher(s: &str) -> bool {
 fn shell(s: &str) -> bool {
     matches!(bare(s), "sh" | "bash" | "zsh")
 }
-fn skip_sudo(tokens: &[&str]) -> usize {
-    if tokens.first() != Some(&"sudo") {
-        return 0;
-    }
-    let mut i = 1;
-    while tokens.get(i).is_some_and(|s| s.starts_with('-')) {
-        i += 1;
-    }
-    i
+// Return decoded text and its source length so assignments and redaction share
+// the same word boundaries. No shell is invoked.
+pub(crate) struct ShellWord {
+    pub text: String,
+    pub used: usize,
+    expansion: bool,
+    pub present: bool,
 }
-fn last_url(s: &str) -> Result<String, ParseError> {
-    regex::Regex::new(r"https?://\S+")
-        .unwrap()
-        .find_iter(s)
-        .last()
-        .map(|m| {
-            m.as_str()
-                .trim_end_matches([')', '\'', '"', '`'])
-                .to_owned()
-        })
-        .ok_or_else(|| error("no-url", "no URL found in install command"))
+pub(crate) fn shell_word(s: &str) -> Result<ShellWord, ParseError> {
+    let mut word = String::new();
+    let mut expansion = false;
+    let mut present = false;
+    let mut quote = None;
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if quote.is_none() && c.is_whitespace() {
+            return Ok(ShellWord {
+                text: word,
+                used: i,
+                expansion,
+                present,
+            });
+        }
+        let at_start = !present;
+        // A removed line continuation does not itself form an empty argument.
+        if !(c == '\\'
+            && quote != Some('\'')
+            && chars.peek().is_some_and(|(_, next)| *next == '\n'))
+        {
+            present = true;
+        }
+        match c {
+            '\'' | '"' if quote.is_none() => quote = Some(c),
+            c if quote == Some(c) => quote = None,
+            '\\' if quote != Some('\'') => {
+                let Some(&(_, next)) = chars.peek() else {
+                    return Err(error("unsupported", "unfinished escape in install command"));
+                };
+                if quote == Some('"') && !matches!(next, '$' | '`' | '"' | '\\' | '\n') {
+                    word.push(c);
+                } else {
+                    chars.next();
+                    if next != '\n' {
+                        word.push(next);
+                    }
+                }
+            }
+            _ => {
+                if quote != Some('\'')
+                    && (c == '`' || c == '$' || (c == '~' && quote.is_none() && at_start))
+                {
+                    expansion = true;
+                }
+                word.push(c);
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(error("unsupported", "unclosed quote in install command"));
+    }
+    Ok(ShellWord {
+        text: word,
+        used: s.len(),
+        expansion,
+        present,
+    })
+}
+fn literal_word(s: &str) -> Result<ShellWord, ParseError> {
+    let word = shell_word(s)?;
+    if word.expansion {
+        return Err(error(
+            "unsupported",
+            "shell expansion is not supported; replace variables and ~ with explicit values, or single-quote literal text",
+        ));
+    }
+    Ok(word)
+}
+fn words(mut s: &str) -> Result<Vec<String>, ParseError> {
+    let mut tokens = Vec::new();
+    s = s.trim_start();
+    while !s.is_empty() {
+        let word = literal_word(s)?;
+        if word.present {
+            tokens.push(word.text);
+        }
+        s = s[word.used..].trim_start();
+    }
+    Ok(tokens)
+}
+fn skip_sudo(tokens: &[String]) -> Result<usize, ParseError> {
+    if !tokens.first().is_some_and(|s| bare(s) == "sudo") {
+        return Ok(0);
+    }
+    if tokens.get(1).is_some_and(|s| s.starts_with('-')) {
+        return Err(error(
+            "unsupported",
+            "sudo options are not supported; use plain sudo or remove it",
+        ));
+    }
+    Ok(1)
+}
+fn single_url(tokens: &[String]) -> Result<String, ParseError> {
+    let mut urls = tokens
+        .iter()
+        .map(|s| s.strip_prefix("--url=").unwrap_or(s))
+        .filter(|s| s.starts_with("https://") || s.starts_with("http://"));
+    let url = urls
+        .next()
+        .ok_or_else(|| error("no-url", "no URL found in install command"))?;
+    if urls.next().is_some() {
+        return Err(error(
+            "unsupported",
+            "multiple URLs are not supported; paste a single installer URL",
+        ));
+    }
+    Ok(url.to_owned())
 }
 /// Recognize only the finite installer grammar; this never evaluates shell input.
 pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> {
-    let trimmed = input.trim();
+    let trimmed = input.trim_start();
     if trimmed.is_empty() {
         return Err(error("empty", "empty input"));
     }
     let mut quote = None;
+    let mut escaped = false;
     let mut pipes = Vec::new();
     let bytes = trimmed.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if b == b'\\' && quote != Some(b'\'') {
+            escaped = true;
+            continue;
+        }
         if let Some(q) = quote {
             if b == q {
-                quote = None
+                quote = None;
             }
             continue;
         }
@@ -80,8 +184,14 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
             ));
         }
         if b == b'|' {
-            pipes.push(i)
+            pipes.push(i);
         }
+    }
+    if quote.is_some() || escaped {
+        return Err(error(
+            "unsupported",
+            "unclosed quote or unfinished escape in install command",
+        ));
     }
     let env_re = regex::Regex::new(r"^([A-Z_][A-Z0-9_]*)=").unwrap();
     let mut env_vars = BTreeMap::new();
@@ -89,18 +199,9 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
     while let Some(cap) = env_re.captures(rest) {
         let name = cap[1].to_owned();
         let value = &rest[cap[0].len()..];
-        let (value_text, used) = if value.starts_with(['\'', '"']) {
-            let end = value[1..].find(value.as_bytes()[0] as char).map(|i| i + 1);
-            match end {
-                Some(end) => (value[1..end].to_owned(), end + 1),
-                None => (value[1..].to_owned(), value.len()),
-            }
-        } else {
-            let end = value.find(char::is_whitespace).unwrap_or(value.len());
-            (value[..end].to_owned(), end)
-        };
-        env_vars.insert(name, value_text);
-        rest = value[used..].trim_start();
+        let word = literal_word(value)?;
+        env_vars.insert(name, word.text);
+        rest = value[word.used..].trim_start();
     }
     let mut cmd = InstallCommand {
         env_vars,
@@ -114,7 +215,7 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
     let substitution = regex::Regex::new(r#"-c\s+["']?\$\("#)
         .unwrap()
         .is_match(rest);
-    if process || substitution {
+    if pipes.is_empty() && (process || substitution) {
         let pattern = if process {
             r"^(?:(sudo(?:\s+-\S+)*)\s+)?(?:\S*/)?(sh|bash|zsh)\s+<\(([^)]*)\)\s*$"
         } else {
@@ -131,13 +232,17 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
                 )
             })?;
         let inner = &cap[3];
-        if !inner.split_whitespace().next().is_some_and(fetcher) {
+        let inner_tokens = words(inner)?;
+        if !inner_tokens.first().is_some_and(|s| fetcher(s)) {
             return Err(error(
                 "unsupported",
                 format!("expected curl or wget inside substitution: {inner}"),
             ));
         }
-        cmd.url = last_url(inner)?;
+        if let Some(sudo) = cap.get(1) {
+            skip_sudo(&words(sudo.as_str())?)?;
+        }
+        cmd.url = single_url(&inner_tokens)?;
         cmd.sudo = cap.get(1).is_some();
         cmd.shell = cap[2].into();
         return Ok(cmd);
@@ -149,9 +254,9 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
         .filter_map(|p| p.checked_sub(offset))
         .collect();
     if pipes.is_empty() {
-        let tokens: Vec<_> = rest.split_whitespace().collect();
+        let tokens = words(rest)?;
         return Err(
-            if tokens.get(skip_sudo(&tokens)).is_some_and(|s| fetcher(s)) {
+            if tokens.get(skip_sudo(&tokens)?).is_some_and(|s| fetcher(s)) {
                 error(
                     "no-pipe",
                     "expected `<fetcher> <url> | <shell>` but found no pipe",
@@ -167,31 +272,31 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
     if pipes.len() > 1 {
         return Err(error("unsupported", "multiple pipes are not supported"));
     }
-    let lhs = rest[..pipes[0]].trim();
-    let rhs = rest[pipes[0] + 1..].trim();
-    let left: Vec<_> = lhs.split_whitespace().collect();
-    if !left.get(skip_sudo(&left)).is_some_and(|s| fetcher(s)) {
+    let lhs = &rest[..pipes[0]];
+    let rhs = &rest[pipes[0] + 1..];
+    let left = words(lhs)?;
+    if !left.get(skip_sudo(&left)?).is_some_and(|s| fetcher(s)) {
         return Err(error(
             "no-fetcher",
             format!("left side of pipe must start with curl or wget: {lhs}"),
         ));
     }
-    cmd.url = last_url(lhs)?;
-    let right: Vec<_> = rhs.split_whitespace().collect();
-    let mut i = skip_sudo(&right);
+    cmd.url = single_url(&left)?;
+    let right = words(rhs)?;
+    let mut i = skip_sudo(&right)?;
     if !right.get(i).is_some_and(|s| shell(s)) {
         return Err(error(
             "unsupported",
             format!("right side of pipe must be sh, bash, or zsh: {rhs}"),
         ));
     }
-    cmd.sudo = right.first() == Some(&"sudo");
-    cmd.shell = bare(right[i]).into();
+    cmd.sudo = i == 1;
+    cmd.shell = bare(&right[i]).into();
     i += 1;
-    if right.get(i) == Some(&"-s") {
+    if right.get(i).is_some_and(|s| s == "-s") {
         i += 1
     }
-    if right.get(i) == Some(&"--") {
+    if right.get(i).is_some_and(|s| s == "--") {
         i += 1
     }
     cmd.script_args = right[i..].iter().map(|s| s.to_string()).collect();

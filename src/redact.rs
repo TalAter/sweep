@@ -7,15 +7,9 @@ fn secret(name: &str) -> bool {
         .any(|k| upper.contains(k))
 }
 fn value_end(raw: &str, start: usize) -> usize {
-    let value = &raw[start..];
-    if value.starts_with(['\'', '"']) {
-        value[1..]
-            .find(value.as_bytes()[0] as char)
-            .map(|n| start + n + 2)
-            .unwrap_or(raw.len())
-    } else {
-        start + value.find(char::is_whitespace).unwrap_or(value.len())
-    }
+    crate::parse::shell_word(&raw[start..])
+        .map(|word| start + word.used)
+        .unwrap_or(raw.len())
 }
 /// Redact anchored values, never every occurrence of matching secret bytes.
 pub fn redact_command(cmd: &InstallCommand) -> String {
@@ -34,18 +28,43 @@ pub fn redact_command(cmd: &InstallCommand) -> String {
         .map(|s| s.split('=').next().unwrap_or(s))
         .filter(|s| s.starts_with('-') && secret(s))
         .collect();
-    for flag in flags {
-        let re = regex::Regex::new(&format!(r"(?:^|\s){}(=|\s|$)", regex::escape(flag)))
-            .expect("escaped anchor");
-        for cap in re.captures_iter(raw) {
-            let mut start = cap.get(0).unwrap().end();
-            if &cap[1] != "=" {
-                start += raw[start..].len() - raw[start..].trim_start().len();
-                if start == raw.len() || raw[start..].starts_with('-') {
-                    continue;
-                }
-            }
-            spans.push((start, value_end(raw, start)));
+    let mut tokens = Vec::new();
+    let mut rest = raw.as_str();
+    while !rest.is_empty() {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let start = raw.len() - rest.len();
+        let (word, used, present) = crate::parse::shell_word(rest)
+            .map(|word| (word.text, word.used, word.present))
+            .unwrap_or_else(|_| (rest.to_owned(), rest.len(), true));
+        if present {
+            tokens.push((start, start + used, word));
+        }
+        rest = &rest[used..];
+    }
+    for (i, (start, end, word)) in tokens.iter().enumerate() {
+        let (flag, inline) = word
+            .split_once('=')
+            .map_or((word.as_str(), false), |(f, _)| (f, true));
+        if !flags.contains(flag) {
+            continue;
+        }
+        if inline {
+            // Preserve conventional flag spelling; quoted/concatenated spellings
+            // need the whole source word redacted to avoid leaving secret bytes.
+            let prefix = format!("{flag}=");
+            let value_start = if raw[*start..*end].starts_with(&prefix) {
+                start + prefix.len()
+            } else {
+                *start
+            };
+            spans.push((value_start, *end));
+        } else if let Some((value_start, value_end, _)) = tokens.get(i + 1)
+            && !raw[*value_start..*value_end].starts_with('-')
+        {
+            spans.push((*value_start, *value_end));
         }
     }
     spans.sort_unstable();

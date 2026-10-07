@@ -35,6 +35,8 @@ Providers: Anthropic, OpenAI, OpenRouter, Groq, Mistral, Ollama, Claude Code, an
 custom OpenAI-compatible endpoints. Groq, Mistral, and Ollama require `baseURL`;
 custom endpoints require `baseURL`, `apiKey`, and `model`. Claude Code uses the
 installed `claude` CLI and its authentication; its `model` is optional.
+Anthropic requires a model supporting structured outputs (`output_config.format`)
+and uses a fixed 16,000-token output budget for each pass.
 `SWEEP_CONFIG` supplies a strict JSON overlay, replacing top-level fields rather
 than merging nested objects. `SWEEP_THEME=light` or `dark` overrides appearance.
 
