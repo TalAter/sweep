@@ -19,7 +19,9 @@ class Server(http.server.BaseHTTPRequestHandler):
         if self.path == '/redirect':
             self.send_response(302); self.send_header('Location','/script'); self.end_headers(); return
         body=b'printf "APPROVED_SCRIPT_RAN\\n"\nexit 0\n'
-        if self.path == '/tty': body=b'printf "TTY_PROMPT\\n" >/dev/tty\nread answer </dev/tty\nprintf "ANSWER=%s\\n" "$answer"\n'
+        if self.path in ('/tty','/large-tty'): body=b'printf "TTY_PROMPT\\n" >/dev/tty\nread answer </dev/tty\nprintf "ANSWER=%s\\n" "$answer"\n'
+        if self.path == '/large-tty': body+=b'#'+b'x'*1_000_000+b'\n'
+        if self.path == '/nested-tty': body=b"sh -c 'echo NESTED_PROMPT >/dev/tty; read answer </dev/tty; echo NESTED_DONE'\n"
         self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers()
         try: self.wfile.write(body)
         except BrokenPipeError: pass
@@ -39,7 +41,7 @@ class Session:
         if config is not None: env['SWEEP_CONFIG']=json.dumps(config)
         env.update(extra_env or {})
         self.termios_result=pathlib.Path(self.home.name)/'terminal-state.txt'
-        wrapper='import subprocess,termios,fcntl,sys,signal; fcntl.ioctl(0,termios.TIOCSCTTY,0); '+(f'signal.signal({ignored_signal},signal.SIG_IGN); ' if ignored_signal is not None else '')+'p=subprocess.Popen(sys.argv[2:],stdin='+('subprocess.DEVNULL' if piped_stdin else 'None')+',stdout='+('subprocess.DEVNULL' if redirect_stdout else 'None')+'); open(sys.argv[1]+".pid","w").write(str(p.pid)); p.wait(); open(sys.argv[1],"w").write(repr(termios.tcgetattr(0))); sys.exit(p.returncode)'
+        wrapper='import subprocess,termios,fcntl,sys,signal,os; fcntl.ioctl(0,termios.TIOCSCTTY,0); '+(f'signal.signal({ignored_signal},signal.SIG_IGN); ' if ignored_signal is not None else '')+'p=subprocess.Popen(sys.argv[2:],stdin='+('subprocess.DEVNULL' if piped_stdin else 'None')+',stdout='+('subprocess.DEVNULL' if redirect_stdout else 'None')+'); open(sys.argv[1]+".pid","w").write(str(p.pid)); p.wait(); open(sys.argv[1]+".foreground","w").write(str(os.tcgetpgrp(0))); open(sys.argv[1],"w").write(repr(termios.tcgetattr(0))); sys.exit(p.returncode)'
         self.process=subprocess.Popen([sys.executable,'-c',wrapper,str(self.termios_result),BINARY,*args],stdin=self.slave,stdout=self.slave,stderr=self.slave,env=env,start_new_session=True)
         self.output=b''
     def resize(self,w,h):
@@ -66,6 +68,7 @@ class Session:
         if self.process.poll() is None: raise AssertionError('terminal stalled')
         for _ in range(3): self.pump(.02)
         assert self.process.returncode==code,(self.process.returncode,self.output[-5000:])
+        assert int(pathlib.Path(str(self.termios_result)+'.foreground').read_text())==self.process.pid,'terminal foreground group not restored'
         restored=ast.literal_eval(self.termios_result.read_text())
         # macOS sets kernel-owned PENDIN when canonical mode resumes.
         expected=self.initial.copy();expected[3]&=~getattr(termios,'PENDIN',0);restored[3]&=~getattr(termios,'PENDIN',0)
@@ -76,6 +79,11 @@ class Session:
         os.close(self.master);os.close(self.slave)
         return rows
     def close(self):
+        # Clean a separate foreground installer group too if the test failed mid-run.
+        try:
+            foreground=os.tcgetpgrp(self.slave)
+            if foreground>0 and foreground!=self.process.pid: os.killpg(foreground,signal.SIGKILL)
+        except OSError:pass
         # The wrapper can exit before an installer child; always clean its group.
         try:os.killpg(self.process.pid,signal.SIGKILL)
         except ProcessLookupError:pass
@@ -185,10 +193,73 @@ def signal_after_handoff(sig):
     s=Session([f'curl {URL}/tty | sh'])
     try:
         s.until('No LLM provider');s.send('\x1b[C\r');s.until('TTY_PROMPT')
+        db=sqlite3.connect(pathlib.Path(s.home.name)/'sweep.db')
+        assert db.execute('SELECT outcome,ts_finished FROM invocations').fetchall()==[('running',None)]
+        db.close()
         pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());os.kill(pid,sig)
-        # Python wrapper forwards the negative signal return code through sys.exit.
-        assert s.finish(256-sig)==[]
+        rows=s.finish(128+sig)
+        assert rows==[('errored',128+sig,URL+'/tty')],rows
+        db=sqlite3.connect(pathlib.Path(s.home.name)/'sweep.db')
+        assert db.execute('SELECT status FROM packages').fetchone()==('failed',)
+        db.close()
     finally:s.close()
 
-for name,fn in [('handoff preserves ignored SIGTERM',ignored_signal_after_handoff),('handoff SIGINT',lambda:signal_after_handoff(signal.SIGINT)),('handoff SIGTERM',lambda:signal_after_handoff(signal.SIGTERM)),('handoff SIGHUP',lambda:signal_after_handoff(signal.SIGHUP)),('external SIGTERM',lambda:external_signal(signal.SIGTERM)),('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('fetch failure restoration',fetch_failure)]:run(name,fn)
+def nested_signal_after_handoff(sig, keyboard=False):
+    s=Session([f'curl {URL}/nested-tty | bash'])
+    try:
+        s.until('No LLM provider');s.send('\x1b[C\r');s.until('NESTED_PROMPT')
+        if keyboard: s.send('\x03')
+        else:
+            pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());os.kill(pid,sig)
+        rows=s.finish(128+sig)
+        assert rows==[('errored',128+sig,URL+'/nested-tty')],rows
+        assert b'NESTED_DONE' not in s.output
+    finally:s.close()
+
+def signal_during_finalization():
+    s=Session([f'curl {URL}/tty | sh'])
+    db=None
+    try:
+        s.until('No LLM provider');s.send('\x1b[C\r');s.until('TTY_PROMPT')
+        db=sqlite3.connect(pathlib.Path(s.home.name)/'sweep.db')
+        db.execute('BEGIN IMMEDIATE')
+        s.send('done\r');s.until('ANSWER=done')
+        time.sleep(.15) # Child has exited; finalization is blocked by our write lock.
+        pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());os.kill(pid,signal.SIGTERM)
+        time.sleep(.1);assert s.process.poll() is None
+        db.rollback();db.close();db=None
+        assert s.finish(0)==[('ran',0,URL+'/tty')]
+    finally:
+        if db is not None: db.close()
+        s.close()
+
+def suspend_resume_installer():
+    s=Session([f'curl {URL}/large-tty | sh'])
+    try:
+        s.until('No LLM provider');s.send('\x1b[C\r');s.until('TTY_PROMPT')
+        pid=int(pathlib.Path(str(s.termios_result)+'.pid').read_text());s.send('\x1a')
+        end=time.monotonic()+3
+        while time.monotonic()<end:
+            if sys.platform.startswith('linux'):
+                state=re.search(r'^State:\s+(\w)',pathlib.Path(f'/proc/{pid}/status').read_text(),re.M).group(1)
+            else:
+                state=subprocess.check_output(['ps','-o','stat=','-p',str(pid)],text=True).strip()
+            if state.startswith('T'): break
+            s.pump(.02)
+        assert state.startswith('T'),('Sweep did not suspend with its installer',state)
+        os.kill(pid,signal.SIGCONT);time.sleep(.1);s.send('done\r')
+        assert s.finish(0)==[('ran',0,URL+'/large-tty')]
+        assert b'ANSWER=done' in s.output
+    finally:s.close()
+
+def spawn_failure_restores_foreground():
+    with tempfile.TemporaryDirectory(prefix='sweep-invalid-shell-') as directory:
+        shell=pathlib.Path(directory)/'bash';shell.write_bytes(b'#!/nonexistent/sweep-interpreter\n');shell.chmod(0o755)
+        s=Session([f'curl {URL}/script | bash'],extra_env={'PATH':directory})
+        try:
+            s.until('No LLM provider');s.send('\x1b[C\r')
+            assert s.finish(1)==[('errored',None,URL+'/script')]
+        finally:s.close()
+
+for name,fn in [('spawn failure foreground restoration',spawn_failure_restores_foreground),('installer suspend and resume',suspend_resume_installer),('signal during finalization',signal_during_finalization),('nested handoff SIGINT',lambda:nested_signal_after_handoff(signal.SIGINT)),('nested handoff SIGTERM',lambda:nested_signal_after_handoff(signal.SIGTERM)),('nested handoff SIGHUP',lambda:nested_signal_after_handoff(signal.SIGHUP)),('nested keyboard interrupt',lambda:nested_signal_after_handoff(signal.SIGINT,True)),('handoff preserves ignored SIGTERM',ignored_signal_after_handoff),('handoff SIGINT',lambda:signal_after_handoff(signal.SIGINT)),('handoff SIGTERM',lambda:signal_after_handoff(signal.SIGTERM)),('handoff SIGHUP',lambda:signal_after_handoff(signal.SIGHUP)),('external SIGTERM',lambda:external_signal(signal.SIGTERM)),('external SIGINT',lambda:external_signal(signal.SIGINT)),('external SIGHUP',lambda:external_signal(signal.SIGHUP)),('piped stdin mode',piped_input_mode),('redirected stdout mode',redirected_output_mode),('analysis cancel',analysis_cancel),('controlling terminal handoff',terminal_handoff),('NO_COLOR terminal',no_color),('default cancel',cancel_default),('approve after redirect',approve),('cancel during fetch',loading_cancel),('cancel empty paste',paste_cancel),('paste retry and resize',paste_retry_resize),('danger confirmation',danger),('manipulation confirmation',lambda:danger(True)),('fetch failure restoration',fetch_failure)]:run(name,fn)
 server.shutdown()

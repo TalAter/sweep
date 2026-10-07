@@ -21,16 +21,24 @@ redacted. Analysis never executes downloaded content.
 ## Execution and persistence
 
 Approved bytes are saved before they are sent to the shell. The shell receives
-`-s --`, parsed arguments, and environment overrides; it can still prompt through
-its controlling terminal. Terminal UI and errors use stderr; `list` uses stdout.
-Installers are never retried automatically.
+`-s --`, parsed arguments, and environment overrides; it can still prompt
+through its controlling terminal. Startup and loader overrides are rejected,
+shell lookup uses Sweep's PATH, and zsh user startup files are disabled.
+Terminal UI and errors use stderr; `list` uses stdout. Installers are never
+retried automatically.
 
 SQLite records invocations separately from packages. A package is keyed by its
-source URL and created only on the approved execution path. The invocation result
-and package status update commit together. A successful rerun preserves the first
-installation time; a failed rerun does not erase a successful installation.
-Cancellation records the committed attempt without creating a package or script
-file. Cancelling command entry before submission records nothing.
+source URL and created only on the approved execution path. The package and a
+`running` invocation commit together before spawning; the final invocation
+result and package status update commit together. The installer owns a
+foreground process group; signals reach its children, and Sweep restores
+terminal ownership before recording the result. Signal handling stays active
+through the final database transaction. An uncatchable termination leaves the
+unfinished invocation as evidence of an attempt whose outcome is unknown. A
+successful rerun preserves the first installation time; a failed rerun does not
+erase a successful installation. Cancellation records the committed attempt
+without creating a package or script file. Cancelling command entry before
+submission records nothing.
 
 Script files are keyed by SHA-256 and published atomically, so readers cannot see
 partial writes. Invocation hashes are fingerprints, not foreign keys into that
@@ -38,8 +46,9 @@ cache. Download limits apply while streaming, including after decompression.
 
 ## Configuration
 
-Configuration is read-only JSONC. `SWEEP_CONFIG` overlays whole top-level fields,
-not nested provider entries. Provider keys can reference environment variables.
-Missing or invalid provider entries produce an explicit no-analysis state; they
-never implicitly approve execution. Unreadable or malformed configuration stops
-startup with an error.
+Configuration is read-only JSONC. `SWEEP_CONFIG` overlays whole top-level
+fields, not nested provider entries. Provider keys can reference environment
+variables. Absent providers produce a no-analysis state; misconfigured providers
+display their failure reason. Neither implicitly approves execution. Canned
+responses from `SWEEP_TEST_RESPONSES` are available only in debug builds.
+Unreadable or malformed configuration stops startup with an error.

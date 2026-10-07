@@ -56,12 +56,17 @@ pub fn finish_install(store: &mut Store, started: &str, decision: InstallDecisio
             invocation.final_url = Some(fetched.final_url);
             invocation.sha256 = Some(fetched.sha256.clone());
             invocation.install_command_json = Some(serde_json::to_string(&parsed)?);
+            // Keep signal handling scoped through the final database transaction.
+            let signals = crate::exec_signals::ExecutionSignals::open()?;
             let execution = (|| -> Result<i32> {
                 store.save_script(&fetched.sha256, &fetched.bytes)?;
-                let package =
-                    store.find_or_create_package(&parsed.url, &slug_from_url(&parsed.url))?;
-                invocation.package_id = Some(package.id);
-                Ok(exec::run_script(&parsed, &fetched.bytes)?)
+                invocation.outcome = "running".into();
+                store.begin_exec(&mut invocation, &parsed.url, &slug_from_url(&parsed.url))?;
+                Ok(exec::run_script_with_signals(
+                    &parsed,
+                    &fetched.bytes,
+                    &signals,
+                )?)
             })();
             let finished = now();
             invocation.ts_finished = Some(finished.clone());

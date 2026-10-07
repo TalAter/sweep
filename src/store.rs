@@ -67,6 +67,22 @@ impl Store {
     pub fn insert_invocation(&self, inv: &Invocation) -> Result<()> {
         insert(&self.db, inv)
     }
+    /// Publish the package and unfinished invocation together, before spawning.
+    pub fn begin_exec(&mut self, inv: &mut Invocation, url: &str, slug: &str) -> Result<()> {
+        let tx = self.db.transaction()?;
+        tx.execute("INSERT INTO packages(slug,source_url,status,first_seen_at) VALUES(?1,?2,'attempting',?3) ON CONFLICT(source_url) DO NOTHING", rusqlite::params![slug, url, now()])?;
+        let package_id = tx.query_row(
+            "SELECT id FROM packages WHERE source_url=?1",
+            [url],
+            |row| row.get(0),
+        )?;
+        let mut pending = inv.clone();
+        pending.package_id = Some(package_id);
+        insert(&tx, &pending)?;
+        tx.commit()?;
+        inv.package_id = Some(package_id);
+        Ok(())
+    }
     pub fn record_exec(
         &mut self,
         inv: &Invocation,
@@ -77,7 +93,10 @@ impl Store {
     ) -> Result<()> {
         let tx = self.db.transaction()?;
         tx.execute("UPDATE packages SET status=CASE WHEN ?1=0 THEN 'installed' WHEN status='attempting' THEN 'failed' ELSE status END,current_sha256=CASE WHEN ?1=0 THEN ?2 ELSE current_sha256 END,installed_at=CASE WHEN ?1=0 AND installed_at IS NULL THEN ?3 ELSE installed_at END,last_ran_at=?3 WHERE id=?4",rusqlite::params![exit_code,sha,ran_at,package_id])?;
-        insert(&tx, inv)?;
+        let updated = tx.execute("UPDATE invocations SET ts_finished=?1,outcome=?2,exit_code=?3,error_message=?4 WHERE id=?5 AND outcome='running' AND ts_finished IS NULL AND package_id=?6", rusqlite::params![inv.ts_finished,inv.outcome,inv.exit_code,inv.error_message,inv.id,package_id])?;
+        if updated == 0 {
+            insert(&tx, inv)?;
+        }
         tx.commit()?;
         Ok(())
     }
