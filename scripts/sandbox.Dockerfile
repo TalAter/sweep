@@ -8,6 +8,7 @@ RUN cargo build --locked --release
 
 FROM build AS verify
 COPY tests ./tests
+COPY examples ./examples
 RUN cargo test --locked && python3 tests/terminal.py target/release/sweep
 
 FROM ubuntu:24.04 AS sandbox

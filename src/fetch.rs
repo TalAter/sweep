@@ -73,10 +73,7 @@ pub async fn fetch_script_with_timeout(
             }
             bytes.extend_from_slice(&chunk);
         }
-        let sha256 = Sha256::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let sha256 = hex::encode(Sha256::digest(&bytes));
         Ok(FetchedScript {
             bytes,
             sha256,
