@@ -17,6 +17,9 @@ Unescaped `$` (including double-quoted `$VAR`), unquoted leading `~`, and
 arbitrary command substitution are refused; use explicit values or single-quoted
 or escaped literals. The recognized `shell -c "$(fetcher ...)"` installer wrapper
 remains supported without evaluating the substitution.
+Runner shell options other than standalone `-s` are refused, rather than
+converted to script arguments. Use `-s --` for script arguments starting with
+`-` or `+`.
 
 ## Approval and analysis
 
@@ -30,6 +33,8 @@ Detected manipulation always requires typing `install`, even when analysis fails
 Fetch failure ends the session because there are no script bytes to approve.
 Both passes receive URL provenance and the command with recognized secret values
 redacted. Analysis never executes downloaded content.
+The Claude CLI disables built-in and MCP tools and loads an explicitly empty,
+strict MCP configuration for both passes.
 
 ## Execution and persistence
 

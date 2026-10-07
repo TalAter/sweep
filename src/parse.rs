@@ -298,6 +298,14 @@ pub fn parse_install_command(input: &str) -> Result<InstallCommand, ParseError> 
     }
     if right.get(i).is_some_and(|s| s == "--") {
         i += 1
+    } else if right
+        .get(i)
+        .is_some_and(|s| s != "-" && (s.starts_with('-') || s.starts_with('+')))
+    {
+        return Err(error(
+            "unsupported",
+            "runner shell options other than -s are not supported; use -s -- before script arguments",
+        ));
     }
     cmd.script_args = right[i..].iter().map(|s| s.to_string()).collect();
     Ok(cmd)

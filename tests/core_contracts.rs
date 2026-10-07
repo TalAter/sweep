@@ -634,6 +634,37 @@ fn redaction_covers_complete_quoted_and_escaped_secret_words() {
 }
 
 #[test]
+fn parser_rejects_runner_options_instead_of_turning_them_into_script_arguments() {
+    for shell in ["sh", "bash", "zsh", "sudo /bin/bash"] {
+        for options in [
+            "-e",
+            "-se",
+            "-s -e",
+            "+e",
+            "-s +e",
+            "-o pipefail",
+            "--rcfile startup",
+            "-c true",
+        ] {
+            let raw = format!("curl https://example.com/i | {shell} {options}");
+            let err = parse_install_command(&raw).expect_err(&raw);
+            assert_eq!(err.kind, "unsupported", "{raw}");
+            assert!(err.message.contains("shell options"), "{raw}: {err}");
+        }
+        for args in ["-- -e +e", "-s -- -e +e", "-s version -e +e"] {
+            let raw = format!("curl https://example.com/i | {shell} {args}");
+            let cmd = parse_install_command(&raw).unwrap();
+            let expected = if args.contains("version") {
+                vec!["version", "-e", "+e"]
+            } else {
+                vec!["-e", "+e"]
+            };
+            assert_eq!(cmd.script_args, expected, "{raw}");
+        }
+    }
+}
+
+#[test]
 fn parser_refuses_additional_explicit_curl_url_options() {
     for input in [
         "curl https://first --url=https://second | sh",

@@ -8,8 +8,8 @@ fn redaction_covers_fetcher_credentials_without_hiding_public_flags() {
             "wget --auth-no-challenge --password <redacted> https://example.com/i | sh",
         ),
         (
-            "curl -u 'name:secret' -H 'Authorization: Bearer private' -H 'Accept: text/plain' https://example.com/i | sh --author Alice",
-            "curl -u <redacted> -H <redacted> -H 'Accept: text/plain' https://example.com/i | sh --author Alice",
+            "curl -u 'name:secret' -H 'Authorization: Bearer private' -H 'Accept: text/plain' https://example.com/i | sh -s -- --author Alice",
+            "curl -u <redacted> -H <redacted> -H 'Accept: text/plain' https://example.com/i | sh -s -- --author Alice",
         ),
         (
             "curl --user=name:secret --header='Proxy-Authorization: Basic private' https://example.com/i | sh",
@@ -43,16 +43,16 @@ fn redaction_covers_fetcher_credentials_without_hiding_public_flags() {
 fn redaction_consumes_whole_shell_values_including_concatenation_and_escapes() {
     for (raw, expected) in [
         (
-            "curl https://example.com/i | sh --token 'first'\"second part\"tail --author Alice",
-            "curl https://example.com/i | sh --token <redacted> --author Alice",
+            "curl https://example.com/i | sh -s -- --token 'first'\"second part\"tail --author Alice",
+            "curl https://example.com/i | sh -s -- --token <redacted> --author Alice",
         ),
         (
-            "curl https://example.com/i | sh --token=bare' secret' --author Alice",
-            "curl https://example.com/i | sh --token=<redacted> --author Alice",
+            "curl https://example.com/i | sh -s -- --token=bare' secret' --author Alice",
+            "curl https://example.com/i | sh -s -- --token=<redacted> --author Alice",
         ),
         (
-            r#"curl https://example.com/i | sh --token="first\" secret" --author Alice"#,
-            "curl https://example.com/i | sh --token=<redacted> --author Alice",
+            r#"curl https://example.com/i | sh -s -- --token="first\" secret" --author Alice"#,
+            "curl https://example.com/i | sh -s -- --token=<redacted> --author Alice",
         ),
         (
             "curl -H 'Authorization: Bearer '\"private suffix\" https://example.com/i | sh",
@@ -68,10 +68,10 @@ fn redaction_consumes_whole_shell_values_including_concatenation_and_escapes() {
 
 #[test]
 fn redaction_retains_compact_secret_names() {
-    let raw = "MYTOKEN=private ApiKey=private curl https://example.com/i | sh --accessToken private --author=Alice";
+    let raw = "MYTOKEN=private ApiKey=private curl https://example.com/i | sh -s -- --accessToken private --author=Alice";
     // Mixed-case assignment parsing is a separate parser limitation.
     let mut cmd = parse_install_command(
-        "curl https://example.com/i | sh --accessToken private --author=Alice",
+        "curl https://example.com/i | sh -s -- --accessToken private --author=Alice",
     )
     .unwrap();
     cmd.raw = raw.into();
@@ -79,7 +79,7 @@ fn redaction_retains_compact_secret_names() {
     cmd.env_vars.insert("ApiKey".into(), "private".into());
     assert_eq!(
         redact_command(&cmd),
-        "MYTOKEN=<redacted> ApiKey=<redacted> curl https://example.com/i | sh --accessToken <redacted> --author=Alice"
+        "MYTOKEN=<redacted> ApiKey=<redacted> curl https://example.com/i | sh -s -- --accessToken <redacted> --author=Alice"
     );
 }
 
@@ -87,8 +87,8 @@ fn redaction_retains_compact_secret_names() {
 fn private_keys_and_dash_prefixed_fetcher_credentials_are_hidden() {
     for (raw, expected) in [
         (
-            "PRIVATEKEY=private curl https://example.com/i | sh --privateKey private --author Alice",
-            "PRIVATEKEY=<redacted> curl https://example.com/i | sh --privateKey <redacted> --author Alice",
+            "PRIVATEKEY=private curl https://example.com/i | sh -s -- --privateKey private --author Alice",
+            "PRIVATEKEY=<redacted> curl https://example.com/i | sh -s -- --privateKey <redacted> --author Alice",
         ),
         (
             "curl --user '-alice:private' https://example.com/i | sh",
