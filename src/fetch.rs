@@ -25,7 +25,6 @@ pub async fn fetch_script_with_timeout(
     cancel: &CancellationToken,
     timeout: Duration,
 ) -> Result<FetchedScript, FetchScriptError> {
-    use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
     const MAX: usize = 5 * 1024 * 1024;
     let err = |reason: &str, message: String| FetchScriptError {
@@ -37,7 +36,7 @@ pub async fn fetch_script_with_timeout(
             .redirect(reqwest::redirect::Policy::limited(20))
             .build()
             .map_err(|e| err("network", format!("network error fetching {url}: {e}")))?;
-        let response = client
+        let mut response = client
             .get(url)
             .send()
             .await
@@ -56,15 +55,13 @@ pub async fn fetch_script_with_timeout(
             ));
         }
         let final_url = response.url().to_string();
-        let mut stream = response.bytes_stream();
         let mut bytes = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                err(
-                    "network",
-                    format!("network error reading body from {url}: {e}"),
-                )
-            })?;
+        while let Some(chunk) = response.chunk().await.map_err(|e| {
+            err(
+                "network",
+                format!("network error reading body from {url}: {e}"),
+            )
+        })? {
             if bytes.len() + chunk.len() > MAX {
                 return Err(err(
                     "too-large",
