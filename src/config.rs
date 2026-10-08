@@ -45,6 +45,10 @@ pub fn load(home: &Path, env: &HashMap<String, String>) -> Result<Value, String>
     }
     Ok(config)
 }
+/// Pill caps need a patched font; anything but JSON `true` leaves them off.
+pub fn nerd_fonts(config: &Value) -> bool {
+    config.get("nerdFonts").and_then(Value::as_bool) == Some(true)
+}
 pub fn resolve_provider(
     config: &Value,
     env: &HashMap<String, String>,
@@ -121,6 +125,18 @@ pub fn resolve_provider(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn nerd_fonts_is_true_only_for_json_true() {
+        assert!(nerd_fonts(&json!({"nerdFonts": true})));
+        for config in [
+            json!({}),
+            json!({"nerdFonts": false}),
+            json!({"nerdFonts": "true"}),
+            json!({"nerdFonts": 1}),
+        ] {
+            assert!(!nerd_fonts(&config), "{config}");
+        }
+    }
     #[test]
     fn jsonc_and_shallow_override_preserve_unknown_fields() {
         let home = tempfile::tempdir().unwrap();

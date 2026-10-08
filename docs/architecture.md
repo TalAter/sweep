@@ -68,5 +68,24 @@ Configuration is read-only JSONC. `SWEEP_CONFIG` overlays whole top-level
 fields, not nested provider entries. Provider keys can reference environment
 variables. Absent providers produce a no-analysis state; misconfigured providers
 display their failure reason. Neither implicitly approves execution. Canned
-responses from `SWEEP_TEST_RESPONSES` are available only in debug builds.
+responses from `SWEEP_TEST_RESPONSES` and the wizard's `SWEEP_MODELS_URL` catalog
+override are available only in debug builds.
 Unreadable or malformed configuration stops startup with an error.
+
+## First-run setup
+
+The setup wizard runs only when `config.jsonc` is absent (NotFound) and
+`SWEEP_CONFIG` is empty, for both launch forms before any fetch; `list` never
+triggers it. An existing file, even empty, skips it so a user who deliberately
+emptied the file is not re-prompted; a dangling symlink or unreadable file is
+left for the config loader. A non-empty `SWEEP_CONFIG` already supplies a
+configuration. Without a stderr TTY it explains and exits 2.
+
+Cancelling (Esc, Ctrl-C, SIGINT/SIGTERM/SIGHUP, even while queued input is still
+being drained) writes nothing: no config, schema, database, or cache. Finishing
+with nothing checked is a deliberate hatch (`finish_without_llm`): the session
+runs without analysis until a provider is added. Every entry is validated with
+the session's resolver before anything is written; the config is never written
+over a `config.jsonc` that appeared meanwhile. The same run reloads the file and
+reuses the wizard's terminal appearance probe. The models.dev and appearance
+caches are published only after the config.

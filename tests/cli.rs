@@ -2,13 +2,29 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn sweep(home: &TempDir, args: &[&str]) -> Output {
+    sweep_with(home, args, &[])
+}
+
+fn sweep_with(home: &TempDir, args: &[&str], env: &[(&str, &str)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sweep"))
         .args(args)
         .env("SWEEP_HOME", home.path())
         .env_remove("SWEEP_CONFIG")
         .env_remove("SWEEP_TEST_RESPONSES")
+        .envs(env.iter().copied())
         .output()
         .unwrap()
+}
+
+fn invocations(home: &TempDir) -> Vec<(String, Option<i32>)> {
+    let db = rusqlite::Connection::open(home.path().join("sweep.db")).unwrap();
+    let mut rows = db
+        .prepare("SELECT outcome, exit_code FROM invocations")
+        .unwrap();
+    rows.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
 }
 
 #[test]
@@ -18,11 +34,7 @@ fn missing_command_without_a_terminal_is_a_usage_error_and_records_nothing() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("usage"));
-    let db = rusqlite::Connection::open(home.path().join("sweep.db")).unwrap();
-    let n: i64 = db
-        .query_row("SELECT COUNT(*) FROM invocations", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(n, 0);
+    assert!(!home.path().join("sweep.db").exists());
 }
 
 #[test]
@@ -115,6 +127,7 @@ fn existing_database_is_read_without_rewriting_installed_or_failed_packages() {
 #[test]
 fn unavailable_terminal_never_runs_and_records_committed_command() {
     let home = TempDir::new().unwrap();
+    std::fs::write(home.path().join("config.jsonc"), "").unwrap();
     let output = sweep(&home, &["curl http://127.0.0.1:1/script | sh"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -127,4 +140,43 @@ fn unavailable_terminal_never_runs_and_records_committed_command() {
         )
         .unwrap();
     assert_eq!(row, (1, "errored".into(), None));
+}
+
+const INSTALL: &str = "curl http://127.0.0.1:1/script | sh";
+const NO_CONFIG: &str = "sweep: no config found; run sweep in a terminal to set one up.\n";
+
+#[test]
+fn missing_config_without_a_terminal_explains_setup_and_records_nothing() {
+    let home = TempDir::new().unwrap();
+    let output = sweep(&home, &[INSTALL]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), NO_CONFIG);
+    assert!(!home.path().join("sweep.db").exists(), "no database");
+    assert!(!home.path().join("config.jsonc").exists());
+    assert!(!home.path().join("cache").exists());
+}
+
+/// Without a terminal the session itself fails, which proves setup was skipped and
+/// the invocation reached the session.
+fn assert_setup_skipped(home: &TempDir, env: &[(&str, &str)]) {
+    let output = sweep_with(home, &[INSTALL], env);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("stderr is not a terminal"), "{stderr}");
+    assert_eq!(invocations(home), vec![("errored".to_string(), None)]);
+}
+
+#[test]
+fn config_overlay_skips_setup_and_reaches_the_session() {
+    let home = TempDir::new().unwrap();
+    assert_setup_skipped(&home, &[("SWEEP_CONFIG", "{}")]);
+    assert!(!home.path().join("config.jsonc").exists());
+}
+
+#[test]
+fn empty_config_file_skips_setup_and_reaches_the_session() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(home.path().join("config.jsonc"), "").unwrap();
+    assert_setup_skipped(&home, &[]);
 }

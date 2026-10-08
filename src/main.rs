@@ -6,7 +6,7 @@ use std::{
 use sweep::{
     analyze, config, parse,
     store::{Invocation, Store, now},
-    tui,
+    tui, wizard,
 };
 
 #[tokio::main]
@@ -38,14 +38,13 @@ async fn run() -> anyhow::Result<i32> {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".sweep")
         });
-    config::load(&home, &env).map_err(anyhow::Error::msg)?;
-    let mut store = Store::open(&home)?;
+    let mut config = config::load(&home, &env).map_err(anyhow::Error::msg)?;
     let positional = std::env::args_os()
         .nth(1)
         .map(|arg| arg.to_string_lossy().trim().to_owned())
         .unwrap_or_default();
     if positional == "list" {
-        let packages = store.list_installed_packages()?;
+        let packages = Store::open(&home)?.list_installed_packages()?;
         let text = if packages.is_empty() {
             "No packages installed.\n".to_owned()
         } else {
@@ -74,7 +73,7 @@ async fn run() -> anyhow::Result<i32> {
             },
             Err(error) => {
                 eprintln!("sweep: {}", error.message);
-                store.insert_invocation(&Invocation {
+                Store::open(&home)?.insert_invocation(&Invocation {
                     id: uuid::Uuid::new_v4().to_string(),
                     ts_started: started,
                     ts_finished: Some(now()),
@@ -87,33 +86,51 @@ async fn run() -> anyhow::Result<i32> {
             }
         }
     };
-    let provider = analyze::resolve_analysis_provider(&home, &env);
-    let decision =
-        match tui::run_session(start, provider, tui::resolve_appearance(&home), false).await {
-            Ok(decision) => decision,
-            Err(failure) => {
-                if let Some(raw) = failure.raw {
-                    store.insert_invocation(&Invocation {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        ts_started: started,
-                        ts_finished: Some(now()),
-                        raw_input: raw,
-                        url: failure.parsed.as_ref().map(|p| p.url.clone()),
-                        install_command_json: failure
-                            .parsed
-                            .as_ref()
-                            .map(serde_json::to_string)
-                            .transpose()?,
-                        final_url: failure.fetched.as_ref().map(|f| f.final_url.clone()),
-                        sha256: failure.fetched.as_ref().map(|f| f.sha256.clone()),
-                        outcome: "errored".into(),
-                        error_message: Some(failure.error.to_string()),
-                        ..Default::default()
-                    })?;
-                }
-                return Err(failure.error.into());
+    let mut appearance = None;
+    if wizard::needed(&home, &env) {
+        if !std::io::stderr().is_terminal() {
+            eprintln!("sweep: no config found; run sweep in a terminal to set one up.");
+            return Ok(2);
+        }
+        match wizard::run(&home, &env).await? {
+            wizard::Outcome::Completed(probed) => {
+                eprintln!("🧠 Configuration saved");
+                appearance = Some(probed);
             }
-        };
+            wizard::Outcome::Cancelled => return Ok(0),
+        }
+        config = config::load(&home, &env).map_err(anyhow::Error::msg)?;
+    }
+    // Opened after the setup gate so a cancelled or refused setup leaves no database.
+    let mut store = Store::open(&home)?;
+    let provider = analyze::resolve_analysis_provider(&home, &env);
+    let nerd_fonts = config::nerd_fonts(&config);
+    let appearance = appearance.unwrap_or_else(|| tui::resolve_appearance(&home));
+    let decision = match tui::run_session(start, provider, appearance, nerd_fonts).await {
+        Ok(decision) => decision,
+        Err(failure) => {
+            if let Some(raw) = failure.raw {
+                store.insert_invocation(&Invocation {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    ts_started: started,
+                    ts_finished: Some(now()),
+                    raw_input: raw,
+                    url: failure.parsed.as_ref().map(|p| p.url.clone()),
+                    install_command_json: failure
+                        .parsed
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()?,
+                    final_url: failure.fetched.as_ref().map(|f| f.final_url.clone()),
+                    sha256: failure.fetched.as_ref().map(|f| f.sha256.clone()),
+                    outcome: "errored".into(),
+                    error_message: Some(failure.error.to_string()),
+                    ..Default::default()
+                })?;
+            }
+            return Err(failure.error.into());
+        }
+    };
     sweep::app::finish_install(&mut store, &started, decision)
 }
 /// A closed pipe (`sweep list | head`) is not an error for the caller.

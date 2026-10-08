@@ -33,3 +33,13 @@ saved scripts.
 
 **Script store**: Saved script contents identified by their content hash.
 A declined invocation can have a hash without a saved script.
+
+**Setup wizard**: The first-run screens that write `config.jsonc` and its schema
+when no config exists. Cancelling it leaves the Sweep home untouched.
+
+**No-LLM hatch**: Finishing the setup wizard with no provider selected
+(`finish_without_llm`). The session then runs without analysis until a provider
+is added to the config.
+
+**Model catalog**: The models.dev listing the wizard offers per provider, cached
+under the Sweep home for a day.
