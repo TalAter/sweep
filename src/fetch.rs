@@ -20,13 +20,16 @@ pub async fn fetch_script(
 ) -> Result<FetchedScript, FetchScriptError> {
     fetch_script_with_timeout(url, cancel, Duration::from_secs(30)).await
 }
+/// Downloads (scripts, the models.dev catalog) are refused beyond this size, by
+/// Content-Length or while streaming, rather than buffered.
+pub(crate) const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 pub async fn fetch_script_with_timeout(
     url: &str,
     cancel: &CancellationToken,
     timeout: Duration,
 ) -> Result<FetchedScript, FetchScriptError> {
     use sha2::{Digest, Sha256};
-    const MAX: usize = 5 * 1024 * 1024;
+    const MAX: usize = MAX_BODY_BYTES;
     let err = |reason: &str, message: String| FetchScriptError {
         reason: reason.into(),
         message,

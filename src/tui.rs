@@ -2,6 +2,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -52,14 +53,12 @@ pub struct Ui {
     pub appearance: Appearance,
     pub nerd_fonts: bool,
     pub color_level: u8,
-    input: String,
-    cursor: usize,
+    editor: LineEditor,
     run_focused: bool,
     // Rendering updates viewport bounds, including after terminal resizes.
     scroll: Cell<u16>,
     max_scroll: Cell<u16>,
     tick: usize,
-    killed: String,
 }
 impl Ui {
     pub fn new(phase: Phase, appearance: Appearance, nerd_fonts: bool) -> Self {
@@ -68,19 +67,20 @@ impl Ui {
             appearance,
             nerd_fonts,
             color_level: 3,
-            input: String::new(),
-            cursor: 0,
+            editor: LineEditor::default(),
             run_focused: false,
             scroll: Cell::new(0),
             max_scroll: Cell::new(0),
             tick: 0,
-            killed: String::new(),
         }
+    }
+    /// The loading spinner is the only animated phase.
+    fn animating(&self) -> bool {
+        matches!(self.phase, Phase::Loading { .. })
     }
     pub fn transition(&mut self, phase: Phase) {
         self.phase = phase;
-        self.input.clear();
-        self.cursor = 0;
+        self.editor.clear();
         self.run_focused = false;
         self.scroll.set(0);
         self.max_scroll.set(0);
@@ -94,7 +94,6 @@ impl Ui {
             return Action::None;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
         if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
             return Action::Cancel;
         }
@@ -134,121 +133,25 @@ impl Ui {
             }
             return Action::None;
         }
-        match key.code {
-            KeyCode::Enter => {
-                let text = self.input.trim().to_string();
-                if matches!(self.phase, Phase::Paste { .. }) {
-                    if !text.is_empty() {
-                        return Action::Submit(text);
-                    }
-                } else if text == "install" {
-                    return Action::Run;
-                } else {
-                    self.input.clear();
-                    self.cursor = 0;
+        if key.code == KeyCode::Enter {
+            let text = self.editor.text().trim().to_string();
+            if matches!(self.phase, Phase::Paste { .. }) {
+                if !text.is_empty() {
+                    return Action::Submit(text);
                 }
+            } else if text == "install" {
+                return Action::Run;
+            } else {
+                self.editor.clear();
             }
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.input.len(),
-            KeyCode::Left if alt => self.word_left(),
-            KeyCode::Right if alt => self.word_right(),
-            KeyCode::Left => self.cursor = self.previous(),
-            KeyCode::Right => self.cursor = self.next(),
-            KeyCode::Backspace => {
-                let old = self.cursor;
-                if alt {
-                    self.word_left();
-                } else {
-                    self.cursor = self.previous();
-                }
-                if alt && self.cursor < old {
-                    self.killed = self.input[self.cursor..old].to_string();
-                }
-                self.input.drain(self.cursor..old);
-            }
-            KeyCode::Delete => {
-                let next = self.next();
-                self.input.drain(self.cursor..next);
-            }
-            KeyCode::Char('a') if ctrl => self.cursor = 0,
-            KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
-            KeyCode::Char('u') if ctrl && self.cursor > 0 => {
-                self.killed = self.input.drain(..self.cursor).collect();
-                self.cursor = 0;
-            }
-            KeyCode::Char('k') if ctrl && self.cursor < self.input.len() => {
-                self.killed = self.input.drain(self.cursor..).collect();
-            }
-            KeyCode::Char('y') if ctrl => {
-                let killed = self.killed.clone();
-                self.paste(&killed);
-            }
-            KeyCode::Char('b') if alt => self.word_left(),
-            KeyCode::Char('f') if alt => self.word_right(),
-            KeyCode::Char(c) if !ctrl && !alt => self.paste(&c.to_string()),
-            _ => {}
+            return Action::None;
         }
+        self.editor.key(key);
         Action::None
     }
-    fn previous(&self) -> usize {
-        self.input
-            .grapheme_indices(true)
-            .rfind(|(i, _)| *i < self.cursor)
-            .map_or(0, |(i, _)| i)
-    }
-    fn next(&self) -> usize {
-        self.input
-            .grapheme_indices(true)
-            .find(|(i, _)| *i > self.cursor)
-            .map_or(self.input.len(), |(i, _)| i)
-    }
-    fn word_left(&mut self) {
-        self.cursor = self
-            .input
-            .unicode_word_indices()
-            .rfind(|(i, _)| *i < self.cursor)
-            .map_or(0, |(i, _)| i);
-    }
-    fn word_right(&mut self) {
-        self.cursor = self
-            .input
-            .unicode_word_indices()
-            .find(|(i, word)| i + word.len() > self.cursor)
-            .map_or(self.input.len(), |(i, word)| i + word.len());
-    }
     pub fn paste(&mut self, text: &str) {
-        if !self.typing() {
-            return;
-        }
-        let text: String = text
-            .chars()
-            .filter(|c| !c.is_control() || *c == '\t')
-            .collect();
-        let mut end = text
-            .len()
-            .min((256 * 1024_usize).saturating_sub(self.input.len()));
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        self.input.insert_str(self.cursor, &text[..end]);
-        self.cursor += end;
-    }
-    fn colors(&self) -> (Color, Color, Color, Color, Color) {
-        match self.appearance {
-            Appearance::Dark => (
-                Color::Rgb(210, 210, 225),
-                Color::Rgb(170, 170, 195),
-                Color::Rgb(35, 35, 50),
-                Color::Rgb(55, 45, 80),
-                Color::Rgb(255, 100, 100),
-            ),
-            Appearance::Light => (
-                Color::Black,
-                Color::Rgb(45, 45, 70),
-                Color::Rgb(218, 232, 250),
-                Color::Rgb(220, 215, 238),
-                Color::Rgb(190, 25, 45),
-            ),
+        if self.typing() {
+            self.editor.paste(text);
         }
     }
     pub fn frame_colors(&self) -> (Color, Color) {
@@ -269,12 +172,16 @@ impl Ui {
             (Appearance::Light, InsightKind::Danger) => {
                 (Color::Rgb(190, 25, 45), Color::Rgb(170, 170, 195))
             }
-            (Appearance::Dark, _) => (Color::Rgb(80, 160, 255), Color::Rgb(40, 60, 100)),
-            (Appearance::Light, _) => (Color::Rgb(25, 90, 190), Color::Rgb(170, 170, 195)),
+            _ => frame_gradient(self.appearance),
         }
     }
     fn body(&self) -> Vec<Line<'static>> {
-        let (body, supporting, _, _, danger) = self.colors();
+        let Palette {
+            body,
+            supporting,
+            danger,
+            ..
+        } = palette(self.appearance);
         let base = Style::default().fg(body);
         let plain = |s: String| Line::styled(s, base);
         match &self.phase {
@@ -354,7 +261,13 @@ impl Ui {
         if area.width < 6 || area.height < 4 {
             return;
         }
-        let (_, supporting, surface, selected, _) = self.colors();
+        let Palette {
+            body,
+            supporting,
+            surface,
+            selected,
+            danger,
+        } = palette(self.appearance);
         let lines = self.body();
         let paste = matches!(self.phase, Phase::Paste { .. });
         let indent = if paste { 0 } else { 1 };
@@ -390,7 +303,20 @@ impl Ui {
             width,
             height,
         );
-        self.border(frame, rect);
+        let (start, end) = if self.color_level < 3 {
+            (body, body)
+        } else {
+            self.frame_colors()
+        };
+        let status = matches!(self.phase, Phase::Loading { .. })
+            .then(|| format!("{} Analyzing…", SPINNER[(self.tick / 3) % SPINNER.len()]));
+        draw_card_border(
+            frame.buffer_mut(),
+            rect,
+            start,
+            end,
+            status.as_deref().map(|text| (text, body)),
+        );
         let inner = Rect::new(
             rect.x + 2 + indent as u16,
             rect.y + 2,
@@ -408,18 +334,7 @@ impl Ui {
         );
         let action_y = inner.y + inner.height.saturating_sub(actions_height);
         let base = Style::default().fg(supporting);
-        let (label, primary, separator) = match self.appearance {
-            Appearance::Dark => (
-                Color::Rgb(115, 115, 140),
-                Color::Rgb(245, 186, 74),
-                Color::Rgb(65, 65, 80),
-            ),
-            Appearance::Light => (
-                Color::Rgb(105, 105, 130),
-                Color::Rgb(255, 165, 50),
-                Color::Rgb(175, 175, 195),
-            ),
-        };
+        let (label, primary, separator) = action_colors(self.appearance);
         let action =
             |glyph: &'static str, text: &'static str, primary_action: bool, focused: bool| {
                 let background = if focused { selected } else { Color::Reset };
@@ -439,17 +354,18 @@ impl Ui {
         let divider = || Span::styled(" │ ", Style::default().fg(separator));
         match &self.phase {
             Phase::Paste { error } => {
-                self.input_line(
+                self.editor.render(
                     frame,
                     Rect::new(inner.x, action_y, inner.width, 1),
                     "curl ... | sh",
-                    surface,
+                    Style::default().fg(body).bg(surface),
+                    Style::default().fg(supporting).bg(surface),
                 );
                 if let Some(error) = error {
                     frame.render_widget(
                         Paragraph::new(error.as_str())
                             .wrap(Wrap { trim: false })
-                            .style(Style::default().fg(self.colors().4)),
+                            .style(Style::default().fg(danger)),
                         Rect::new(
                             inner.x,
                             action_y + 1,
@@ -491,11 +407,12 @@ impl Ui {
                         Paragraph::new("Type 'install' to run:").style(base),
                         Rect::new(inner.x, action_y + 2, inner.width, 1),
                     );
-                    self.input_line(
+                    self.editor.render(
                         frame,
                         Rect::new(inner.x, action_y + 3, inner.width, 1),
                         "",
-                        surface,
+                        Style::default().fg(body).bg(surface),
+                        Style::default().fg(supporting).bg(surface),
                     );
                 }
             }
@@ -506,107 +423,294 @@ impl Ui {
                 .buffer_mut()
                 .set_string(rect.right() - 16, rect.bottom() - 1, hint, base);
         }
-        for cell in &mut frame.buffer_mut().content {
-            if self.color_level == 0 {
-                if cell.bg == selected {
-                    cell.modifier.insert(Modifier::REVERSED);
-                }
-                cell.fg = Color::Reset;
-                cell.bg = Color::Reset;
-            } else if self.color_level < 3 {
-                cell.fg = quantize(cell.fg, self.color_level);
-                cell.bg = quantize(cell.bg, self.color_level);
-            }
+        apply_color_level(frame.buffer_mut(), self.color_level, selected);
+    }
+}
+
+/// Single-line Emacs-style editor over a UTF-8 string with a byte cursor and kill buffer.
+#[derive(Clone, Debug, Default)]
+pub struct LineEditor {
+    input: String,
+    cursor: usize,
+    killed: String,
+    mask: Option<char>,
+}
+impl LineEditor {
+    /// An editor that shows `mask` per character instead of the text (for secrets).
+    pub fn masked(mask: char) -> Self {
+        Self {
+            mask: Some(mask),
+            ..Self::default()
         }
     }
-    fn input_line(&self, frame: &mut Frame<'_>, area: Rect, placeholder: &str, surface: Color) {
+    pub fn text(&self) -> &str {
+        &self.input
+    }
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+    /// Drops the text but keeps the kill buffer, so a yank still works after a reset.
+    pub fn clear(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+    }
+    /// Editing keys only; Enter and Esc are left to the caller.
+    pub fn key(&mut self, key: KeyEvent) {
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = self.input.len(),
+            KeyCode::Left if alt => self.word_left(),
+            KeyCode::Right if alt => self.word_right(),
+            KeyCode::Left => self.cursor = self.previous(),
+            KeyCode::Right => self.cursor = self.next(),
+            KeyCode::Backspace => {
+                let old = self.cursor;
+                if alt {
+                    self.word_left();
+                } else {
+                    self.cursor = self.previous();
+                }
+                if alt && self.cursor < old {
+                    self.killed = self.input[self.cursor..old].to_string();
+                }
+                self.input.drain(self.cursor..old);
+            }
+            KeyCode::Delete => {
+                let next = self.next();
+                self.input.drain(self.cursor..next);
+            }
+            KeyCode::Char('a') if ctrl => self.cursor = 0,
+            KeyCode::Char('e') if ctrl => self.cursor = self.input.len(),
+            KeyCode::Char('u') if ctrl && self.cursor > 0 => {
+                self.killed = self.input.drain(..self.cursor).collect();
+                self.cursor = 0;
+            }
+            KeyCode::Char('k') if ctrl && self.cursor < self.input.len() => {
+                self.killed = self.input.drain(self.cursor..).collect();
+            }
+            KeyCode::Char('y') if ctrl => {
+                let killed = self.killed.clone();
+                self.paste(&killed);
+            }
+            KeyCode::Char('b') if alt => self.word_left(),
+            KeyCode::Char('f') if alt => self.word_right(),
+            KeyCode::Char(c) if !ctrl && !alt => self.paste(&c.to_string()),
+            _ => {}
+        }
+    }
+    fn previous(&self) -> usize {
+        self.input
+            .grapheme_indices(true)
+            .rfind(|(i, _)| *i < self.cursor)
+            .map_or(0, |(i, _)| i)
+    }
+    fn next(&self) -> usize {
+        self.input
+            .grapheme_indices(true)
+            .find(|(i, _)| *i > self.cursor)
+            .map_or(self.input.len(), |(i, _)| i)
+    }
+    fn word_left(&mut self) {
+        self.cursor = self
+            .input
+            .unicode_word_indices()
+            .rfind(|(i, _)| *i < self.cursor)
+            .map_or(0, |(i, _)| i);
+    }
+    fn word_right(&mut self) {
+        self.cursor = self
+            .input
+            .unicode_word_indices()
+            .find(|(i, word)| i + word.len() > self.cursor)
+            .map_or(self.input.len(), |(i, word)| i + word.len());
+    }
+    /// Inserts at the cursor, dropping control characters (tabs stay) and capping at 256 KiB.
+    pub fn paste(&mut self, text: &str) {
+        let text: String = text
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\t')
+            .collect();
+        let mut end = text
+            .len()
+            .min((256 * 1024_usize).saturating_sub(self.input.len()));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.input.insert_str(self.cursor, &text[..end]);
+        self.cursor += end;
+    }
+    /// Draws one row, scrolled so the cursor stays visible; `placeholder` is shown in
+    /// its own style while the text is empty.
+    pub fn render(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        placeholder: &str,
+        text_style: Style,
+        placeholder_style: Style,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let (body, supporting, _, _, _) = self.colors();
-        let mut start = self.cursor;
+        let (shown, cursor): (std::borrow::Cow<'_, str>, usize) = match self.mask {
+            Some(mask) => (
+                std::iter::repeat_n(mask, self.input.chars().count())
+                    .collect::<String>()
+                    .into(),
+                mask.len_utf8() * self.input[..self.cursor].chars().count(),
+            ),
+            None => (self.input.as_str().into(), self.cursor),
+        };
+        let visible = area.width.saturating_sub(1) as usize;
+        let mut start = cursor;
         while start > 0 {
-            let prev = self.input[..start]
+            let prev = shown[..start]
                 .char_indices()
                 .next_back()
                 .map_or(0, |(i, _)| i);
-            if self.input[prev..self.cursor].width() >= area.width.saturating_sub(1) as usize {
+            if shown[prev..cursor].width() >= visible {
                 break;
             }
             start = prev;
         }
-        let shown = if self.input.is_empty() {
-            placeholder
+        let (text, style) = if shown.is_empty() {
+            (placeholder, placeholder_style)
         } else {
-            &self.input[start..]
+            (&shown[start..], text_style)
         };
-        frame.render_widget(
-            Paragraph::new(shown).style(
-                Style::default()
-                    .fg(if self.input.is_empty() {
-                        supporting
-                    } else {
-                        body
-                    })
-                    .bg(surface),
-            ),
-            area,
-        );
-        let offset = self.input[start..self.cursor]
-            .width()
-            .min(area.width.saturating_sub(1) as usize) as u16;
+        frame.render_widget(Paragraph::new(text).style(style), area);
+        let offset = shown[start..cursor].width().min(visible) as u16;
         frame.set_cursor_position((area.x + offset, area.y));
     }
-    fn border(&self, frame: &mut Frame<'_>, r: Rect) {
-        let (start, end) = if self.color_level < 3 {
-            (self.colors().0, self.colors().0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Palette {
+    pub body: Color,
+    pub supporting: Color,
+    pub surface: Color,
+    pub selected: Color,
+    pub danger: Color,
+}
+pub(crate) fn palette(appearance: Appearance) -> Palette {
+    match appearance {
+        Appearance::Dark => Palette {
+            body: Color::Rgb(210, 210, 225),
+            supporting: Color::Rgb(170, 170, 195),
+            surface: Color::Rgb(35, 35, 50),
+            selected: Color::Rgb(55, 45, 80),
+            danger: Color::Rgb(255, 100, 100),
+        },
+        Appearance::Light => Palette {
+            body: Color::Black,
+            supporting: Color::Rgb(45, 45, 70),
+            surface: Color::Rgb(218, 232, 250),
+            selected: Color::Rgb(220, 215, 238),
+            danger: Color::Rgb(190, 25, 45),
+        },
+    }
+}
+/// Key-hint colors: label text, the primary action's glyph, and the divider between actions.
+pub(crate) fn action_colors(appearance: Appearance) -> (Color, Color, Color) {
+    match appearance {
+        Appearance::Dark => (
+            Color::Rgb(115, 115, 140),
+            Color::Rgb(245, 186, 74),
+            Color::Rgb(65, 65, 80),
+        ),
+        Appearance::Light => (
+            Color::Rgb(105, 105, 130),
+            Color::Rgb(255, 165, 50),
+            Color::Rgb(175, 175, 195),
+        ),
+    }
+}
+/// Border gradient for a card that carries no risk verdict.
+pub(crate) fn frame_gradient(appearance: Appearance) -> (Color, Color) {
+    match appearance {
+        Appearance::Dark => (Color::Rgb(80, 160, 255), Color::Rgb(40, 60, 100)),
+        Appearance::Light => (Color::Rgb(25, 90, 190), Color::Rgb(170, 170, 195)),
+    }
+}
+pub(crate) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Rounded card border: the top and left edges run a gradient from `start` to `end`, the
+/// others sit at `end`. `status` is written over the bottom edge as `" {text} "` in its color.
+pub(crate) fn draw_card_border(
+    buf: &mut Buffer,
+    r: Rect,
+    start: Color,
+    end: Color,
+    status: Option<(&str, Color)>,
+) {
+    for x in 0..r.width {
+        let color = gradient(start, end, x, r.width.saturating_sub(1));
+        buf[(r.x + x, r.y)]
+            .set_symbol(if x == 0 {
+                "╭"
+            } else if x + 1 == r.width {
+                "╮"
+            } else {
+                "─"
+            })
+            .set_fg(color);
+        buf[(r.x + x, r.bottom() - 1)]
+            .set_symbol(if x == 0 {
+                "╰"
+            } else if x + 1 == r.width {
+                "╯"
+            } else {
+                "─"
+            })
+            .set_fg(end);
+    }
+    for y in 1..r.height.saturating_sub(1) {
+        buf[(r.x, r.y + y)].set_symbol("│").set_fg(gradient(
+            start,
+            end,
+            y - 1,
+            r.height.saturating_sub(3),
+        ));
+        buf[(r.right() - 1, r.y + y)].set_symbol("│").set_fg(end);
+    }
+    if let Some((text, color)) = status
+        && r.width > 20
+    {
+        buf.set_string(
+            r.x + 2,
+            r.bottom() - 1,
+            format!(" {text} "),
+            Style::default().fg(color),
+        );
+    }
+}
+
+/// Reduces every cell to what the terminal supports; without color, `reversed_bg` cells
+/// (the focused action) fall back to reverse video so focus stays visible.
+pub(crate) fn apply_color_level(buf: &mut Buffer, level: u8, reversed_bg: Color) {
+    if level >= 3 {
+        return;
+    }
+    for cell in &mut buf.content {
+        if level == 0 {
+            if cell.bg == reversed_bg {
+                cell.modifier.insert(Modifier::REVERSED);
+            }
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
         } else {
-            self.frame_colors()
-        };
-        let buf = frame.buffer_mut();
-        for x in 0..r.width {
-            let color = gradient(start, end, x, r.width.saturating_sub(1));
-            buf[(r.x + x, r.y)]
-                .set_symbol(if x == 0 {
-                    "╭"
-                } else if x + 1 == r.width {
-                    "╮"
-                } else {
-                    "─"
-                })
-                .set_fg(color);
-            buf[(r.x + x, r.bottom() - 1)]
-                .set_symbol(if x == 0 {
-                    "╰"
-                } else if x + 1 == r.width {
-                    "╯"
-                } else {
-                    "─"
-                })
-                .set_fg(end);
-        }
-        for y in 1..r.height.saturating_sub(1) {
-            buf[(r.x, r.y + y)].set_symbol("│").set_fg(gradient(
-                start,
-                end,
-                y - 1,
-                r.height.saturating_sub(3),
-            ));
-            buf[(r.right() - 1, r.y + y)].set_symbol("│").set_fg(end);
-        }
-        if matches!(self.phase, Phase::Loading { .. }) && r.width > 20 {
-            let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            buf.set_string(
-                r.x + 2,
-                r.bottom() - 1,
-                format!(" {} Analyzing… ", spinner[(self.tick / 3) % spinner.len()]),
-                Style::default().fg(self.colors().0),
-            );
+            cell.fg = quantize(cell.fg, level);
+            cell.bg = quantize(cell.bg, level);
         }
     }
 }
 
-fn gradient(start: Color, end: Color, n: u16, total: u16) -> Color {
+pub(crate) fn gradient(start: Color, end: Color, n: u16, total: u16) -> Color {
     use palette::{FromColor, Mix, Oklab, Srgb};
     let (Color::Rgb(r, g, b), Color::Rgb(rr, gg, bb)) = (start, end) else {
         return end;
@@ -652,6 +756,9 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<String>()
     }
+    fn draw(terminal: &mut Terminal<TestBackend>, ui: &Ui, dirty: &mut bool) {
+        draw_frame(terminal, dirty, ui.tick, ui.animating(), |f| ui.render(f)).unwrap();
+    }
     #[test]
     fn idle_frames_are_skipped_but_changes_and_loading_animation_draw() {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -659,12 +766,12 @@ mod tests {
         let mut dirty = true;
         for tick in 0..40 {
             ui.tick = tick;
-            draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+            draw(&mut terminal, &ui, &mut dirty);
         }
         assert_eq!(terminal.get_frame().count(), 1, "idle UI should draw once");
         ui.paste("curl https://example.com/i | sh");
         dirty = true;
-        draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        draw(&mut terminal, &ui, &mut dirty);
         assert_eq!(terminal.get_frame().count(), 2);
         assert!(
             terminal
@@ -678,7 +785,7 @@ mod tests {
         );
         terminal.backend_mut().resize(100, 30);
         dirty = true;
-        draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+        draw(&mut terminal, &ui, &mut dirty);
         assert_eq!(terminal.get_frame().area(), Rect::new(0, 0, 100, 30));
         ui.transition(Phase::Loading {
             source: "example.com/i".into(),
@@ -686,7 +793,7 @@ mod tests {
         dirty = true;
         for tick in 0..10 {
             ui.tick = tick;
-            draw_session_frame(&mut terminal, &ui, &mut dirty).unwrap();
+            draw(&mut terminal, &ui, &mut dirty);
         }
         assert_eq!(
             terminal.get_frame().count(),
@@ -720,7 +827,7 @@ mod tests {
             let mut ui = resolved(kind);
             ui.paste("INSTALL");
             assert_eq!(ui.key(key(KeyCode::Enter)), Action::None);
-            assert_eq!(ui.input, "");
+            assert_eq!(ui.editor.text(), "");
             ui.paste(" install ");
             assert_eq!(ui.key(key(KeyCode::Enter)), Action::Run);
         }
@@ -760,6 +867,15 @@ mod tests {
         for (w, h) in [(1, 1), (8, 3), (32, 10), (80, 24)] {
             screen(&plain, w, h);
         }
+    }
+    #[test]
+    fn nerd_font_caps_wrap_risk_pills_only_when_enabled() {
+        let mut ui = resolved(InsightKind::Caution);
+        let text = screen(&ui, 100, 30);
+        assert!(!text.contains('\u{e0b6}') && !text.contains('\u{e0b4}'));
+        ui.nerd_fonts = true;
+        let text = screen(&ui, 100, 30);
+        assert!(text.contains("\u{e0b6} ⚠ caution \u{e0b4}"), "{text}");
     }
     #[test]
     fn overflow_can_scroll_without_hiding_approval_controls() {
@@ -874,99 +990,197 @@ pub async fn run_session(
         .await
         .map_err(|error| Box::new(session.failure(error)))
 }
-fn draw_session_frame<B: ratatui::backend::Backend>(
+/// What a dialog reports after collecting background results.
+pub(crate) enum Progress<E> {
+    Idle,
+    /// Something on screen changed; the next frame is redrawn.
+    Changed,
+    Exit(E),
+}
+
+/// One alternate-screen dialog (the session, the setup wizard) driven by [`drive`].
+pub(crate) trait Dialog {
+    type Exit;
+    fn render(&self, frame: &mut Frame<'_>);
+    /// While true, idle frames still redraw every third tick for the spinner.
+    fn animating(&self) -> bool;
+    fn set_tick(&mut self, tick: usize);
+    /// `Some` leaves the loop.
+    fn key(&mut self, key: KeyEvent) -> Option<Self::Exit>;
+    fn paste(&mut self, text: &str);
+    /// Background results, collected after each batch of input so cancellation wins
+    /// over errors caused by aborting in-flight work.
+    fn poll(&mut self) -> io::Result<Progress<Self::Exit>>;
+    /// The exit used when `cancelled` fires (an external signal).
+    fn cancelled(&mut self) -> Self::Exit;
+}
+
+/// Draws when something changed or, while animating, every third tick.
+fn draw_frame<B: ratatui::backend::Backend>(
     terminal: &mut ratatui::Terminal<B>,
-    ui: &Ui,
     dirty: &mut bool,
+    tick: usize,
+    animating: bool,
+    render: impl FnOnce(&mut Frame<'_>),
 ) -> Result<(), B::Error> {
-    if *dirty || (matches!(ui.phase, Phase::Loading { .. }) && ui.tick.is_multiple_of(3)) {
-        terminal.draw(|frame| ui.render(frame))?;
+    if *dirty || (animating && tick.is_multiple_of(3)) {
+        terminal.draw(render)?;
         *dirty = false;
     }
     Ok(())
 }
 
-async fn run_session_inner(
-    session: &mut Session,
-    provider: AnalysisProvider,
-) -> io::Result<InstallDecision> {
+/// Runs `dialog` on an open terminal until it exits. `cancelled` is checked before
+/// every frame and before every queued event, so a signal is never outrun by input.
+pub(crate) async fn drive<D: Dialog>(
+    dialog: &mut D,
+    terminal: &mut TerminalSession,
+    cancelled: impl Fn() -> bool,
+) -> io::Result<D::Exit> {
     use crossterm::event::{self, Event};
-    #[cfg(unix)]
-    let signals = SessionSignals::open()?;
-    let mut terminal = TerminalSession::open()?;
-    let mut pipeline = session
-        .parsed
-        .as_ref()
-        .map(|parsed| Pipeline::start(parsed.clone(), provider.clone()));
     let mut dirty = true;
+    let mut tick = 0usize;
     loop {
-        #[cfg(unix)]
-        if signals.received() {
-            return Ok(session.cancel(pipeline.as_mut()));
+        if cancelled() {
+            return Ok(dialog.cancelled());
         }
         if !TerminalSession::active() {
             return Err(io::Error::other(
                 "terminal released after a background panic",
             ));
         }
-        draw_session_frame(&mut terminal.terminal, &session.ui, &mut dirty)?;
-        // Input is processed before asynchronous results so cancellation wins over
-        // errors caused by aborting an in-flight request.
+        dialog.set_tick(tick);
+        draw_frame(
+            &mut terminal.terminal,
+            &mut dirty,
+            tick,
+            dialog.animating(),
+            |frame| dialog.render(frame),
+        )?;
         // Crossterm's /dev/tty backend skips reads with a zero timeout.
         while event::poll(std::time::Duration::from_millis(1))? {
+            if cancelled() {
+                return Ok(dialog.cancelled());
+            }
             dirty = true;
-            let action = match event::read()? {
-                Event::Key(key) => session.ui.key(key),
+            let exit = match event::read()? {
+                Event::Key(key) => dialog.key(key),
                 Event::Paste(text) => {
-                    session.ui.paste(&text);
-                    Action::None
+                    dialog.paste(&text);
+                    None
                 }
-                _ => Action::None,
+                _ => None,
             };
-            match action {
-                Action::Cancel => return Ok(session.cancel(pipeline.as_mut())),
-                Action::Run => return Ok(session.decision(true)),
-                Action::Submit(raw) => {
-                    if session.submit(raw) {
-                        pipeline = session
-                            .parsed
-                            .as_ref()
-                            .map(|parsed| Pipeline::start(parsed.clone(), provider.clone()));
-                    }
-                }
-                Action::None => {}
+            if let Some(exit) = exit {
+                return Ok(exit);
             }
         }
-        if let Some(work) = &mut pipeline {
-            loop {
-                match work.updates.try_recv() {
-                    Ok(Update::Fetched(fetched)) => session.fetched = Some(fetched),
-                    Ok(Update::Resolved(result)) => {
-                        dirty = true;
-                        if let Some(parsed) = &session.parsed {
-                            session
-                                .ui
-                                .transition(Phase::Resolved(derive_view(result, &parsed.url)));
-                        }
-                        work.complete = true;
-                    }
-                    Ok(Update::Failed(error)) => {
-                        return Ok(InstallDecision::FetchFailed {
-                            raw: session.raw.clone().expect("fetch requires command"),
-                            parsed: session.parsed.clone().expect("fetch requires parse"),
-                            error,
-                        });
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) if !work.complete => {
-                        return Err(io::Error::other("analysis task stopped unexpectedly"));
-                    }
-                    Err(_) => break,
-                }
-            }
+        match dialog.poll()? {
+            Progress::Idle => {}
+            Progress::Changed => dirty = true,
+            Progress::Exit(exit) => return Ok(exit),
         }
-        session.ui.tick = session.ui.tick.wrapping_add(1);
+        tick = tick.wrapping_add(1);
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+}
+
+/// The session plus its in-flight fetch and analysis.
+struct SessionDialog<'a> {
+    session: &'a mut Session,
+    provider: AnalysisProvider,
+    pipeline: Option<Pipeline>,
+}
+impl SessionDialog<'_> {
+    fn start_pipeline(&mut self) {
+        self.pipeline = self
+            .session
+            .parsed
+            .as_ref()
+            .map(|parsed| Pipeline::start(parsed.clone(), self.provider.clone()));
+    }
+}
+impl Dialog for SessionDialog<'_> {
+    type Exit = InstallDecision;
+    fn render(&self, frame: &mut Frame<'_>) {
+        self.session.ui.render(frame);
+    }
+    fn animating(&self) -> bool {
+        self.session.ui.animating()
+    }
+    fn set_tick(&mut self, tick: usize) {
+        self.session.ui.tick = tick;
+    }
+    fn key(&mut self, key: KeyEvent) -> Option<InstallDecision> {
+        match self.session.ui.key(key) {
+            Action::Cancel => Some(self.session.cancel(self.pipeline.as_mut())),
+            Action::Run => Some(self.session.decision(true)),
+            Action::Submit(raw) => {
+                if self.session.submit(raw) {
+                    self.start_pipeline();
+                }
+                None
+            }
+            Action::None => None,
+        }
+    }
+    fn paste(&mut self, text: &str) {
+        self.session.ui.paste(text);
+    }
+    fn poll(&mut self) -> io::Result<Progress<InstallDecision>> {
+        let mut progress = Progress::Idle;
+        let Some(work) = &mut self.pipeline else {
+            return Ok(progress);
+        };
+        loop {
+            match work.updates.try_recv() {
+                Ok(Update::Fetched(fetched)) => self.session.fetched = Some(fetched),
+                Ok(Update::Resolved(result)) => {
+                    progress = Progress::Changed;
+                    if let Some(parsed) = &self.session.parsed {
+                        self.session
+                            .ui
+                            .transition(Phase::Resolved(derive_view(result, &parsed.url)));
+                    }
+                    work.complete = true;
+                }
+                Ok(Update::Failed(error)) => {
+                    return Ok(Progress::Exit(InstallDecision::FetchFailed {
+                        raw: self.session.raw.clone().expect("fetch requires command"),
+                        parsed: self.session.parsed.clone().expect("fetch requires parse"),
+                        error,
+                    }));
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) if !work.complete => {
+                    return Err(io::Error::other("analysis task stopped unexpectedly"));
+                }
+                Err(_) => return Ok(progress),
+            }
+        }
+    }
+    fn cancelled(&mut self) -> InstallDecision {
+        self.session.cancel(self.pipeline.as_mut())
+    }
+}
+
+async fn run_session_inner(
+    session: &mut Session,
+    provider: AnalysisProvider,
+) -> io::Result<InstallDecision> {
+    #[cfg(unix)]
+    let signals = SessionSignals::open()?;
+    let mut terminal = TerminalSession::open()?;
+    let mut dialog = SessionDialog {
+        session,
+        provider,
+        pipeline: None,
+    };
+    dialog.start_pipeline();
+    #[cfg(unix)]
+    let cancelled = || signals.received();
+    #[cfg(not(unix))]
+    let cancelled = || false;
+    drive(&mut dialog, &mut terminal, cancelled).await
 }
 
 // Signal dispositions belong to the dialog, not the installer that runs afterward.
@@ -984,12 +1198,12 @@ extern "C" fn session_signal(signal: libc::c_int) {
 }
 
 #[cfg(unix)]
-struct SessionSignals {
+pub(crate) struct SessionSignals {
     previous: Vec<(libc::c_int, libc::sigaction)>,
 }
 #[cfg(unix)]
 impl SessionSignals {
-    fn open() -> io::Result<Self> {
+    pub(crate) fn open() -> io::Result<Self> {
         use std::sync::atomic::Ordering;
         SIGNAL_SESSION_ACTIVE
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -1013,7 +1227,7 @@ impl SessionSignals {
         }
         Ok(guard)
     }
-    fn received(&self) -> bool {
+    pub(crate) fn received(&self) -> bool {
         SESSION_SIGNAL.load(std::sync::atomic::Ordering::Relaxed) != 0
     }
 }
@@ -1028,13 +1242,13 @@ impl Drop for SessionSignals {
     }
 }
 
-struct TerminalSession {
+pub(crate) struct TerminalSession {
     terminal: ratatui::Terminal<ratatui::backend::CrosstermBackend<io::Stderr>>,
 }
 static TERMINAL_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
 impl TerminalSession {
-    fn open() -> io::Result<Self> {
+    pub(crate) fn open() -> io::Result<Self> {
         use crossterm::{
             event::EnableBracketedPaste,
             execute,
@@ -1155,7 +1369,15 @@ impl Drop for Pipeline {
     }
 }
 
+/// Env override, then the hour-old cache, then a terminal probe whose answer is cached.
 pub fn resolve_appearance(home: &Path) -> Appearance {
+    let detected = detect_appearance(home);
+    detected.persist(home);
+    detected.appearance
+}
+/// Same lookup without touching the cache; [`DetectedAppearance::persist`] writes a
+/// probe result later, so a cancelled setup leaves the home untouched.
+pub fn detect_appearance(home: &Path) -> DetectedAppearance {
     use std::io::IsTerminal;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1181,6 +1403,29 @@ pub fn resolve_appearance(home: &Path) -> Appearance {
             })
         },
     )
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetectedAppearance {
+    pub appearance: Appearance,
+    /// Set only when the terminal probe produced the answer.
+    probed_at: Option<u64>,
+}
+impl DetectedAppearance {
+    /// Caches a probe result for an hour; env and cache answers are not rewritten.
+    pub fn persist(&self, home: &Path) {
+        let Some(now) = self.probed_at else {
+            return;
+        };
+        let name = match self.appearance {
+            Appearance::Dark => "dark",
+            Appearance::Light => "light",
+        };
+        let _ = std::fs::create_dir_all(home.join("cache"));
+        let _ = std::fs::write(
+            home.join("cache/appearance.json"),
+            serde_json::json!({ "appearance": name, "ts": now }).to_string(),
+        );
+    }
 }
 pub fn derive_source(source: &str) -> String {
     url::Url::parse(source)
@@ -1406,14 +1651,18 @@ fn appearance_with(
     env_override: Option<&str>,
     now: u64,
     probe: impl FnOnce() -> Option<Appearance>,
-) -> Appearance {
+) -> DetectedAppearance {
     let parse = |value: &str| match value {
         "dark" => Some(Appearance::Dark),
         "light" => Some(Appearance::Light),
         _ => None,
     };
+    let known = |appearance| DetectedAppearance {
+        appearance,
+        probed_at: None,
+    };
     if let Some(value) = env_override.and_then(parse) {
-        return value;
+        return known(value);
     }
     let path = home.join("cache/appearance.json");
     if let Ok(bytes) = std::fs::read(&path)
@@ -1424,14 +1673,15 @@ fn appearance_with(
         )
         && ts.saturating_add(3_600_000) >= now
     {
-        return value;
+        return known(value);
     }
-    if let Some(value) = probe() {
-        let _ = std::fs::create_dir_all(home.join("cache"));
-        let _=std::fs::write(path,serde_json::json!({"appearance":if value==Appearance::Dark {"dark"} else {"light"},"ts":now}).to_string());
-        return value;
+    match probe() {
+        Some(appearance) => DetectedAppearance {
+            appearance,
+            probed_at: Some(now),
+        },
+        None => known(Appearance::Dark),
     }
-    Appearance::Dark
 }
 #[cfg(test)]
 mod appearance_tests {
@@ -1446,16 +1696,41 @@ mod appearance_tests {
         )
         .unwrap();
         assert_eq!(
-            appearance_with(home.path(), Some("dark"), 2000, || panic!("env must win")),
+            appearance_with(home.path(), Some("dark"), 2000, || panic!("env must win")).appearance,
             Appearance::Dark
         );
         assert_eq!(
-            appearance_with(home.path(), None, 2000, || panic!("cache must win")),
+            appearance_with(home.path(), None, 2000, || panic!("cache must win")).appearance,
             Appearance::Light
         );
         assert_eq!(
-            appearance_with(home.path(), None, 4_000_000, || Some(Appearance::Dark)),
+            appearance_with(home.path(), None, 4_000_000, || Some(Appearance::Dark)).appearance,
             Appearance::Dark
+        );
+    }
+    #[test]
+    fn only_a_probe_result_is_cached_and_only_on_persist() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("cache/appearance.json");
+        let probed = appearance_with(home.path(), None, 5000, || Some(Appearance::Light));
+        assert_eq!(probed.appearance, Appearance::Light);
+        assert!(
+            !home.path().join("cache").exists(),
+            "detection must not write"
+        );
+        appearance_with(home.path(), Some("dark"), 5000, || None).persist(home.path());
+        appearance_with(home.path(), None, 5000, || None).persist(home.path());
+        assert!(!cache.exists(), "env and fallback answers are not cached");
+        probed.persist(home.path());
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            serde_json::json!({"appearance": "light", "ts": 5000})
+        );
+        assert_eq!(
+            appearance_with(home.path(), None, 6000, || panic!("cache must win")).appearance,
+            Appearance::Light
         );
     }
 }
@@ -1800,12 +2075,13 @@ mod word_navigation_tests {
         let mut ui = Ui::new(Phase::Paste { error: None }, Appearance::Dark, false);
         ui.paste("curl https://example.com | sh");
         ui.key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
-        assert_eq!(&ui.input[ui.cursor..], "sh");
+        let after_cursor = |ui: &Ui| ui.editor.text()[ui.editor.cursor()..].to_string();
+        assert_eq!(after_cursor(&ui), "sh");
         ui.key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
-        assert_eq!(&ui.input[ui.cursor..], "example.com | sh");
+        assert_eq!(after_cursor(&ui), "example.com | sh");
         ui.key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
-        assert_eq!(&ui.input[ui.cursor..], " | sh");
-        assert_eq!(ui.input, "curl https://example.com | sh");
+        assert_eq!(after_cursor(&ui), " | sh");
+        assert_eq!(ui.editor.text(), "curl https://example.com | sh");
     }
 }
 
@@ -1817,9 +2093,44 @@ mod grapheme_tests {
         let mut ui = Ui::new(Phase::Paste { error: None }, Appearance::Dark, false);
         ui.paste("a👨‍👩‍👧‍👦e\u{301}");
         ui.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(ui.input, "a👨‍👩‍👧‍👦");
+        assert_eq!(ui.editor.text(), "a👨‍👩‍👧‍👦");
         ui.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(ui.input, "a");
+        assert_eq!(ui.editor.text(), "a");
+    }
+}
+#[cfg(test)]
+mod line_editor_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn masked_render_hides_text_and_scrolls_to_keep_the_cursor_visible() {
+        let mut editor = LineEditor::masked('•');
+        editor.paste("sk-sécret");
+        editor.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let text = Style::default().fg(Color::White).bg(Color::Black);
+        let placeholder = Style::default().fg(Color::Gray).bg(Color::Black);
+        let mut terminal = Terminal::new(TestBackend::new(6, 1)).unwrap();
+        terminal
+            .draw(|f| editor.render(f, f.area(), "key", text, placeholder))
+            .unwrap();
+        let row = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert_eq!(row, "••••• ");
+        assert_eq!(
+            ratatui::backend::Backend::get_cursor_position(terminal.backend_mut()).unwrap(),
+            ratatui::layout::Position::new(4, 0)
+        );
+        let mut empty = Terminal::new(TestBackend::new(6, 1)).unwrap();
+        empty
+            .draw(|f| LineEditor::default().render(f, f.area(), "key", text, placeholder))
+            .unwrap();
+        let cell = &empty.backend().buffer().content[0];
+        assert_eq!((cell.symbol(), cell.fg), ("k", Color::Gray));
     }
 }
 #[cfg(test)]
@@ -1830,14 +2141,14 @@ mod kill_buffer_tests {
         let mut ui = Ui::new(Phase::Paste { error: None }, Appearance::Dark, false);
         ui.paste("curl example");
         ui.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
-        assert_eq!(ui.input, "curl ");
+        assert_eq!(ui.editor.text(), "curl ");
         ui.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        assert_eq!(ui.input, "curl example");
+        assert_eq!(ui.editor.text(), "curl example");
         ui.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        assert_eq!(ui.input, "");
+        assert_eq!(ui.editor.text(), "");
         ui.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         ui.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
         ui.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
-        assert_eq!(ui.input, "curl example");
+        assert_eq!(ui.editor.text(), "curl example");
     }
 }
