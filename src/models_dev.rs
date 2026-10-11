@@ -12,11 +12,14 @@ use std::{
 
 use serde_json::Value;
 
-use crate::{atomic_file, fetch::MAX_BODY_BYTES};
+use crate::atomic_file;
 
 pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// The live catalog is ~5.4 MB; refuse anything far beyond that, by Content-Length
+/// or while streaming, rather than buffer it.
+const MAX_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelListError {
@@ -145,19 +148,18 @@ fn is_usable(model: &Value) -> bool {
         && has_text("output")
 }
 
-/// Bodies over [`MAX_BODY_BYTES`] are refused, by Content-Length or while streaming.
 async fn fetch(url: &str) -> Result<Vec<u8>, FetchError> {
     let client = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build()?;
     let mut response = client.get(url).send().await?.error_for_status()?;
     if response
         .content_length()
-        .is_some_and(|n| n > MAX_BODY_BYTES as u64)
+        .is_some_and(|n| n > MAX_CATALOG_BYTES as u64)
     {
         return Err(FetchError::TooLarge);
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
-        if body.len() + chunk.len() > MAX_BODY_BYTES {
+        if body.len() + chunk.len() > MAX_CATALOG_BYTES {
             return Err(FetchError::TooLarge);
         }
         body.extend_from_slice(&chunk);
@@ -406,7 +408,7 @@ mod tests {
             http_fixture(
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    MAX_BODY_BYTES + 1
+                    MAX_CATALOG_BYTES + 1
                 )
                 .into_bytes(),
             )
@@ -424,6 +426,19 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(ids(&cat.models("stale", None)), ["stale-model"]);
+    }
+
+    /// The live api.json is ~5.4 MB; a catalog of that size must load on a first run.
+    #[tokio::test]
+    async fn catalog_sized_like_the_live_api_is_accepted() {
+        let home = tempfile::tempdir().unwrap();
+        let mut catalog = fixture(&["remote"]);
+        catalog["remote"]["pad"] = Value::String("x".repeat(5_400_000));
+        let (url, _) = http_fixture(ok_response(&catalog));
+        let cat = ModelCatalog::load_at(home.path(), &url, SystemTime::now())
+            .await
+            .expect("a live-sized catalog must not be refused as too large");
+        assert_eq!(ids(&cat.models("remote", None)), ["remote-model"]);
     }
 
     #[tokio::test]
