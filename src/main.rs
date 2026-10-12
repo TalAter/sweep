@@ -22,6 +22,13 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<i32> {
+    let positional = std::env::args_os()
+        .nth(1)
+        .map(|arg| arg.to_string_lossy().trim().to_owned())
+        .unwrap_or_default();
+    if positional == "--version" {
+        return print_stdout(concat!("sweep ", env!("CARGO_PKG_VERSION"), "\n")).map(|()| 0);
+    }
     let env: HashMap<String, String> = std::env::vars_os()
         .map(|(k, v)| {
             (
@@ -39,10 +46,6 @@ async fn run() -> anyhow::Result<i32> {
                 .join(".sweep")
         });
     let mut config = config::load(&home, &env).map_err(anyhow::Error::msg)?;
-    let positional = std::env::args_os()
-        .nth(1)
-        .map(|arg| arg.to_string_lossy().trim().to_owned())
-        .unwrap_or_default();
     if positional == "list" {
         let packages = Store::open(&home)?.list_installed_packages()?;
         let text = if packages.is_empty() {

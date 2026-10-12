@@ -180,3 +180,25 @@ fn empty_config_file_skips_setup_and_reaches_the_session() {
     std::fs::write(home.path().join("config.jsonc"), "").unwrap();
     assert_setup_skipped(&home, &[]);
 }
+
+#[test]
+fn version_works_without_setup_or_valid_config_and_records_nothing() {
+    let home = TempDir::new().unwrap();
+    for malformed_config in [false, true] {
+        if malformed_config {
+            std::fs::write(home.path().join("config.jsonc"), "{ broken").unwrap();
+        }
+        let output = sweep(&home, &["--version"]);
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            concat!("sweep ", env!("CARGO_PKG_VERSION"), "\n")
+        );
+        assert!(output.stderr.is_empty());
+        assert!(!home.path().join("sweep.db").exists());
+        assert!(!home.path().join("cache").exists());
+        if !malformed_config {
+            assert!(!home.path().join("config.jsonc").exists());
+        }
+    }
+}
