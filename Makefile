@@ -10,6 +10,7 @@ build:
 terminal:
 	cargo build --locked
 	python3 tests/terminal.py target/debug/sweep
+	python3 tests/help_terminal.py target/debug/sweep
 sandbox:
 	./scripts/sandbox.sh
 linux-test:

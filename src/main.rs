@@ -1,3 +1,6 @@
+mod cli;
+mod help;
+
 use std::{
     collections::HashMap,
     io::{IsTerminal, Write},
@@ -26,8 +29,21 @@ async fn run() -> anyhow::Result<i32> {
         .nth(1)
         .map(|arg| arg.to_string_lossy().trim().to_owned())
         .unwrap_or_default();
-    if positional == "--version" {
-        return print_stdout(concat!("sweep ", env!("CARGO_PKG_VERSION"), "\n")).map(|()| 0);
+    let home = std::env::var_os("SWEEP_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".sweep")
+        });
+    let command = cli::command(&positional);
+    match command {
+        cli::Command::Version => {
+            return print_stdout(concat!("sweep ", env!("CARGO_PKG_VERSION"), "\n")).map(|()| 0);
+        }
+        cli::Command::Help => return help::print(&home).await,
+        cli::Command::Interactive | cli::Command::Install | cli::Command::List => {}
     }
     let env: HashMap<String, String> = std::env::vars_os()
         .map(|(k, v)| {
@@ -37,16 +53,8 @@ async fn run() -> anyhow::Result<i32> {
             )
         })
         .collect();
-    let home = std::env::var_os("SWEEP_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".sweep")
-        });
     let mut config = config::load(&home, &env).map_err(anyhow::Error::msg)?;
-    if positional == "list" {
+    if command == cli::Command::List {
         let packages = Store::open(&home)?.list_installed_packages()?;
         let text = if packages.is_empty() {
             "No packages installed.\n".to_owned()
@@ -62,7 +70,7 @@ async fn run() -> anyhow::Result<i32> {
         return print_stdout(&text).map(|()| 0);
     }
     let started = now();
-    let start = if positional.is_empty() {
+    let start = if command == cli::Command::Interactive {
         if !std::io::stdout().is_terminal() {
             eprintln!("sweep: usage: sweep 'curl https://example.com/install.sh | sh'");
             return Ok(2);

@@ -1375,6 +1375,14 @@ pub fn resolve_appearance(home: &Path) -> Appearance {
     detected.persist(home);
     detected.appearance
 }
+/// Standalone output probes catch termination signals until terminal modes are restored.
+/// Dialogs that already own a signal guard use [`detect_appearance`] directly.
+pub fn detect_appearance_guarded(home: &Path) -> io::Result<Option<DetectedAppearance>> {
+    let signals = SessionSignals::open()?;
+    let detected = detect_appearance(home);
+    Ok((!signals.received()).then_some(detected))
+}
+
 /// Same lookup without touching the cache; [`DetectedAppearance::persist`] writes a
 /// probe result later, so a cancelled setup leaves the home untouched.
 pub fn detect_appearance(home: &Path) -> DetectedAppearance {

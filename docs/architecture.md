@@ -6,6 +6,20 @@ decision and restores the terminal before `app` saves or executes a script.
 Parsing, downloads, provider communication, and storage have independent modules;
 the session coordinates them without owning persistence.
 
+## CLI commands
+
+`src/cli.rs` defines the launch forms used by both dispatch and generated
+`--help`. Add commands there with their descriptions so help stays in sync.
+`--help` and `--version` exit before loading configuration or opening storage;
+the version comes from Cargo package metadata.
+Help reuses terminal color detection, with plain output for pipes unless color is
+forced. A single shine pass requires truecolor, a TTY, and known dimensions that
+fit the full help without wrapping. CI, `TERM=dumb`, `NO_COLOR`, and enabled
+`SWEEP_NO_ANIMATION` disable animation; a resize stops it. Help never changes
+cursor visibility. Theme detection uses the existing override/cache/probe lookup
+without persisting a cache; its probe restores terminal modes. Icy palettes use
+pale blues on dark backgrounds and deeper blues on light backgrounds.
+
 ## Install command parsing
 
 Shell words preserve quoted spaces, empty arguments, concatenated quoted segments,

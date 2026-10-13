@@ -10,6 +10,8 @@ fn sweep_with(home: &TempDir, args: &[&str], env: &[(&str, &str)]) -> Output {
         .args(args)
         .env("SWEEP_HOME", home.path())
         .env_remove("SWEEP_CONFIG")
+        .env_remove("NO_COLOR")
+        .env_remove("FORCE_COLOR")
         .env_remove("SWEEP_TEST_RESPONSES")
         .envs(env.iter().copied())
         .output()
@@ -201,4 +203,93 @@ fn version_works_without_setup_or_valid_config_and_records_nothing() {
             assert!(!home.path().join("config.jsonc").exists());
         }
     }
+}
+
+#[test]
+fn help_describes_available_launch_forms_without_setup_or_valid_config() {
+    let home = TempDir::new().unwrap();
+    for malformed_config in [false, true] {
+        if malformed_config {
+            std::fs::write(home.path().join("config.jsonc"), "{ broken").unwrap();
+        }
+        let output = sweep(&home, &["--help"]);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8_lossy(&output.stdout);
+        for expected in [
+            "sweep",
+            "list",
+            "--help",
+            "--version",
+            "<INSTALL_COMMAND>",
+            "interactive",
+            "curl",
+            "| sh",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("upgrade"));
+        assert!(!text.contains("uninstall"));
+        assert!(!home.path().join("sweep.db").exists());
+        assert!(!home.path().join("cache").exists());
+        if !malformed_config {
+            assert!(!home.path().join("config.jsonc").exists());
+        }
+    }
+}
+
+#[test]
+fn help_supports_color_overrides_and_explains_each_workflow() {
+    let home = TempDir::new().unwrap();
+    let output = sweep_with(&home, &["--help"], &[("FORCE_COLOR", "3")]);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(text.contains("\x1b[38;2;"));
+    assert!(
+        !regex::Regex::new(r"\x1b\[\d+[ABCHf]")
+            .unwrap()
+            .is_match(&text),
+        "pipes must never animate"
+    );
+    for expected in ["Examples:", "Commands:", "sweep list", "Quote the entire"] {
+        assert!(text.contains(expected), "missing {expected}");
+    }
+    let output = sweep_with(
+        &home,
+        &["--help"],
+        &[("FORCE_COLOR", "3"), ("NO_COLOR", "")],
+    );
+    assert!(!output.stdout.contains(&0x1b));
+    assert!(!home.path().join("sweep.db").exists());
+}
+
+#[test]
+fn help_uses_distinct_light_and_dark_palettes_without_writing_state() {
+    let home = TempDir::new().unwrap();
+    for level in ["1", "2", "3"] {
+        let dark = sweep_with(
+            &home,
+            &["--help"],
+            &[("FORCE_COLOR", level), ("SWEEP_THEME", "dark")],
+        );
+        let light = sweep_with(
+            &home,
+            &["--help"],
+            &[("FORCE_COLOR", level), ("SWEEP_THEME", "light")],
+        );
+        assert!(dark.status.success() && light.status.success());
+        assert_ne!(
+            dark.stdout, light.stdout,
+            "theme must affect help colors at level {level}"
+        );
+        let text = String::from_utf8_lossy(&light.stdout);
+        assert!(
+            !text.contains("\x1b[2m"),
+            "light-mode help must not dim explanatory text"
+        );
+        assert!(text.contains("brew for the things you cannot brew."));
+        assert!(!text.contains("SWEEP_NO_ANIMATION"));
+        assert!(!text.contains("NO_COLOR"));
+    }
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 }
